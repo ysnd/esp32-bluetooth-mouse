@@ -80,7 +80,7 @@ int8_t read_tilt(void) {
 void app_main(void)
 {
     btn_init();
-    ESP_LOGI(TAG, "BUTTON TEST READY");
+    ESP_LOGI(TAG, "BUTTON TEST READY!");
     
     while (1) {
         int8_t hwheel = read_tilt();
