@@ -64,6 +64,18 @@ uint8_t mx8650_read_reg(uint8_t addr) {
     return data;
 }
 
+void mx8650_resync(void) {
+    gpio_set_direction(SDIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(SCLK, 1);
+    esp_rom_delay_us(100);
+
+    gpio_set_level(SCLK, 0); //tRESYNC min 1us
+
+    esp_rom_delay_us(2);
+    gpio_set_level(SCLK, 1);
+    esp_rom_delay_us(100); //tSIWTT
+}
+
 void mx8650_init(void) {
     gpio_reset_pin(SCLK);
     gpio_set_direction(SCLK, GPIO_MODE_OUTPUT);
@@ -77,8 +89,12 @@ void mx8650_init(void) {
     uint8_t pid = mx8650_read_reg(PRODUCT_ID_REG);
     ESP_LOGI(TAG, "Product ID: 0x%02X (harus 0x30)", pid);
     if (pid != 0x30) {
-		ESP_LOGE(TAG, "MX650 teu aya cek dei wairing kehed.");
-		return;
+        ESP_LOGW(TAG, "MX8650 teu baleg konek na cek wairing maneh! nyobian resync");
+        mx8650_resync();
+        if (pid != 0x30) {
+            ESP_LOGE(TAG, "MX650 teu aya cek dei wairing kehed.");
+        }
+        return;
     }
     mx8650_write_reg(OPERATION_MODE_REG, 0xB8); //force normal mode led on sleep disable
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
