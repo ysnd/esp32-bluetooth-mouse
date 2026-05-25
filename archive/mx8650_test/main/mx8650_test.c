@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
@@ -14,6 +15,8 @@ const uint8_t SDIO = 23;
 #define DELTA_X_REG 0x03
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
+
+int8_t dy,dx;
 
 static const char *TAG = "MX8650_test";
 
@@ -100,18 +103,27 @@ void mx8650_init(void) {
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
+bool mx8650_has_motion(void) {
+    return (mx8650_read_reg(MOTION_STATUS_REG) & 0x80);
+}
+
+int8_t mx8650_get_dx(void) {
+    return (int8_t)mx8650_read_reg(DELTA_X_REG);
+}
+
+int8_t mx8650_get_dy(void) {
+    return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
+}
+
 void app_main(void){
     ESP_LOGI(TAG, "MX8650 SENSOR TEST");
     mx8650_init();
    
     while (1) {
-        uint8_t motion = mx8650_read_reg(MOTION_STATUS_REG);
-        int8_t dx=0, dy=0;
-
-        if (motion & 0x80) {
-            dx = (int8_t)mx8650_read_reg(DELTA_X_REG);
-            dy = (int8_t)mx8650_read_reg(DELTA_Y_REG);
-            dy = -dy;
+        
+        if (mx8650_has_motion()) {
+            dx = mx8650_get_dx();
+            dy = mx8650_get_dy();
             ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
         vTaskDelay(1);
