@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "xtensa/hal.h"
 
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
@@ -15,6 +16,15 @@ const uint8_t BTN_ML = 22;
 const uint8_t BTN_MR = 27;
 const uint8_t BTN_TF = 19;
 const uint8_t BTN_TB = 5;
+const uint8_t ENC_A = 25;
+const uint8_t ENC_B = 26;
+
+static const int8_t table[16] = {
+    0, -1, +1, 0, 
+    +1, 0, 0, -1,
+    -1, 0, 0, +1,
+    0, +1, -1, 0
+};
 
 #define PRODUCT_ID_REG 0x00
 #define MOTION_STATUS_REG 0x02
@@ -59,6 +69,18 @@ uint8_t read_btn(void) {
         stable_state = raw;
     }
     return stable_state;
+}
+
+//Encoder
+void enc_init(void) {
+    gpio_config_t enc_conf = {
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << ENC_A) | (1ULL << ENC_B),
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&enc_conf);
 }
 
 //MX8650 Sensor
@@ -159,8 +181,15 @@ int8_t mx8650_get_dy(void) {
 
 void app_main(void){
     ESP_LOGI(TAG, "MX8650 MOUSE PoC TEST");
-    btn_init(); 
+    btn_init();
+    enc_init();
     mx8650_init();
+
+    uint8_t a = gpio_get_level(ENC_A);
+    uint8_t b = gpio_get_level(ENC_B);
+
+    uint8_t enc_last_state = (a << 1) |b;
+    int32_t enc_count = 0;
    
     while (1) {
         
@@ -175,6 +204,29 @@ void app_main(void){
         if (btn & 0x04) ESP_LOGI(TAG, "MIDDLE CLICK");
         if (btn & 0x08) ESP_LOGI(TAG, "THUMB FORWARD");
         if (btn & 0x10) ESP_LOGI(TAG, "THUMB BACK");
+
+        a = gpio_get_level(ENC_A);
+        b = gpio_get_level(ENC_B);
+        uint8_t curr = (a << 1) | b;
+
+        if (curr != enc_last_state) {
+            uint8_t idx = (enc_last_state << 2) | curr;
+            int8_t delta = table[idx];
+            enc_count += delta;
+            enc_last_state = curr;
+        }
+        //report per 2 counts = 1 detent
+        int8_t wheel = 0;
+        if (enc_count >= 2) {
+            enc_count -= 2; 
+            wheel = 1;  
+            ESP_LOGI(TAG, "SCROLL:%d", wheel);
+        }
+        if (enc_count <= -2) {
+            enc_count += 2;
+            wheel = -1;
+            ESP_LOGI(TAG, "SCROLL:%d", wheel);
+        }
 
         vTaskDelay(1);
     }
