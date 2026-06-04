@@ -92,6 +92,7 @@ void mx8650_init(void) {
     if (pid != 0x30) {
         ESP_LOGW(TAG, "MX8650 teu baleg konek na cek wairing maneh! nyobian resync");
         mx8650_resync();
+        pid = mx8650_read_reg(PRODUCT_ID_REG);
         if (pid != 0x30) {
             ESP_LOGE(TAG, "MX650 teu aya cek dei wairing kehed.");
         }
