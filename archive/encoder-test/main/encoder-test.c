@@ -7,7 +7,7 @@
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
 
-static const int8_t table[16] = {
+static const int8_t enc_table[16] = {
     0, -1, +1, 0, 
     +1, 0, 0, -1,
     -1, 0, 0, +1,
@@ -39,25 +39,24 @@ void app_main(void) {
     while (1) {
         a = gpio_get_level(ENC_A);
         b = gpio_get_level(ENC_B);
-        uint8_t curr = (a << 1) | b;
+        uint8_t enc_curr = (a << 1) | b;
 
-        if (curr != enc_last_state) {
-            uint8_t idx = (enc_last_state << 2) | curr;
-            int8_t delta = table[idx];
-            enc_count += delta;
-            enc_last_state = curr;
+        if (enc_curr != enc_last_state) {
+            uint8_t idx = (enc_last_state << 2) | enc_curr;
+            enc_count += enc_table[idx];
+            enc_last_state = enc_curr;
         }
         //report per 2 counts = 1 detent
         int8_t wheel = 0;
         if (enc_count >= 2) {
             enc_count -= 2; 
             wheel = 1;  
-            ESP_LOGI(TAG, "SCROLL:-1");
+            ESP_LOGI(TAG, "SCROLL:%d", wheel);
         }
         if (enc_count <= -2) {
             enc_count += 2;
             wheel = -1;
-            ESP_LOGI(TAG, "SCROLL:1");
+            ESP_LOGI(TAG, "SCROLL:%d", wheel);
         }
         vTaskDelay(1);
     }
