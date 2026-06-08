@@ -1,2 +1,1 @@
-## early artifact component tests
-during development.
+## early artifact component tests during development.
