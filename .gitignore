@@ -1,0 +1,8 @@
+**/build/
+**/sdkconfig.old
+**/*.elf
+**/*.bin
+**/*.map
+**/.vscode/
+**/compile_commands.json
+**/*.idx
