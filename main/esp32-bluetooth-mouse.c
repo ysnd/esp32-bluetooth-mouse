@@ -5,7 +5,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "xtensa/hal.h"
 
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
@@ -19,7 +18,7 @@ const uint8_t BTN_TB = 5;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
 
-static const int8_t table[16] = {
+static const int8_t enc_table[16] = {
     0, -1, +1, 0, 
     +1, 0, 0, -1,
     -1, 0, 0, +1,
@@ -158,6 +157,7 @@ void mx8650_init(void) {
     if (pid != 0x30) {
         ESP_LOGW(TAG, "MX8650 teu baleg konek na cek wairing maneh! nyobian resync");
         mx8650_resync();
+        pid = mx8650_read_reg(PRODUCT_ID_REG);
         if (pid != 0x30) {
             ESP_LOGE(TAG, "MX650 teu aya cek dei wairing kehed.");
         }
@@ -187,7 +187,6 @@ void app_main(void){
 
     uint8_t a = gpio_get_level(ENC_A);
     uint8_t b = gpio_get_level(ENC_B);
-
     uint8_t enc_last_state = (a << 1) |b;
     int32_t enc_count = 0;
    
@@ -207,13 +206,12 @@ void app_main(void){
 
         a = gpio_get_level(ENC_A);
         b = gpio_get_level(ENC_B);
-        uint8_t curr = (a << 1) | b;
+        uint8_t enc_curr = (a << 1) | b;
 
-        if (curr != enc_last_state) {
-            uint8_t idx = (enc_last_state << 2) | curr;
-            int8_t delta = table[idx];
-            enc_count += delta;
-            enc_last_state = curr;
+        if (enc_curr != enc_last_state) {
+            uint8_t idx = (enc_last_state << 2) | enc_curr;
+            enc_count += enc_table[idx];
+            enc_last_state = enc_curr;
         }
         //report per 2 counts = 1 detent
         int8_t wheel = 0;
