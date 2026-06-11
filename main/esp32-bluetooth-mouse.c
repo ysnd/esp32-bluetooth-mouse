@@ -51,11 +51,16 @@ static const char *TAG = "MX8650_Mouse_Test";
 
 //HID report descriptor
 static const uint8_t hid_mouse_report_desc[] = {
+    //mouse
     0x05, 0x01, //usage oage (Generic Desktop)
     0x09, 0x02, //usage mouse 
     0xA1, 0x01, //collection (application)
+
+    //pointer
     0x09, 0x01, //usage (pointer)
     0xA1, 0x00, //collection (physical)
+
+    //button 1-5
     0x05, 0x09, //usage page (button)
     0x19, 0x01, //usage min(1)
     0x29, 0x05, //usage max(5)
@@ -64,24 +69,40 @@ static const uint8_t hid_mouse_report_desc[] = {
     0x95, 0x05, //report count(5)
     0x75, 0x01, //report size(1)
     0x81, 0x02, //input (data, variable, absolute)
+
+    //padding
     0x95, 0x01, //report count(1)
     0x75, 0x03, //report size(3)
     0x81, 0x01, //Input(constant)
+
+    //xy wheel
     0x05, 0x01, //use page (generic Desktop)
     0x09, 0x30, //usage (x)
     0x09, 0x31, //usage (y)
     0x09, 0x38, //usage (wheel)
+                
     0x15, 0x81, // logical min(-127)
     0x25, 0x7F, //logical max(127)
     0x75, 0x08, //report size(8)
     0x95, 0x03, //report count(3)
     0x81, 0x06, //input (data, variable, relative)
+
+    //AC-Pan/horizontall scroll
+    0x05, 0x0C,
+    0x0A, 0x38, 0x02,
+
+    0x15, 0x81,
+    0x25, 0x7F,
+    0x75, 0x08,
+    0x95, 0x01,
+    0x81, 0x06,
+
     0xC0, //End collection
     0xC0, //End collection
 };
 
 #define HID_MOUSE_REPORT_DESC_LEN sizeof(hid_mouse_report_desc)
-#define REPORT_PROTOCOL_MOUSE_REPORT_SIZE 4
+#define REPORT_PROTOCOL_MOUSE_REPORT_SIZE 5
 
 //lokal parameter struct  
 typedef struct{
@@ -128,6 +149,34 @@ uint8_t read_btn(void) {
         stable_state = raw;
     }
     return stable_state;
+}
+
+int8_t read_tilt(void) {
+    static uint8_t stable = 0;
+    static uint8_t last_raw = 0;
+    static uint32_t last_change_time = 0;
+
+    uint8_t raw = 0;
+
+    if (!gpio_get_level(BTN_ML)) raw = 1;
+    if (!gpio_get_level(BTN_MR)) raw = 2;
+
+    uint32_t now = esp_timer_get_time() / 1000;
+
+    if (raw != last_raw) {
+        last_raw = raw;
+        last_change_time = now;
+    }
+
+    if ((now - last_change_time) >= 5) {
+        stable = raw;
+    }
+
+    switch (stable) {
+        case 1: return 1;
+        case 2: return -1;
+        default: return 0;
+    }
 }
 
 //Encoder
@@ -268,7 +317,7 @@ int8_t mx8650_get_dy(void) {
 }
 
 //bt HID 
-void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel) {
+void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
     if (!bt_connected) return;
 
     xSemaphoreTake(bt_hid_mutex, portMAX_DELAY);
@@ -283,6 +332,7 @@ void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel) {
         s_local_param.buffer[1] = dx;
         s_local_param.buffer[2] = dy;
         s_local_param.buffer[3] = wheel;
+        s_local_param.buffer[4] = hwheel;
     } else {
         //boot mode
         report_id = ESP_HIDD_BOOT_REPORT_ID_MOUSE;
@@ -388,8 +438,12 @@ void mouse_polling_task(void *pvParameters) {
             ESP_LOGI(TAG, "SCROLL: %d", wheel);
         }
 
+        int8_t hwheel = read_tilt();
+        if (hwheel == 1) ESP_LOGI(TAG, "TILT LEFT : %d", hwheel);
+        if (hwheel == -1) ESP_LOGI(TAG, "TILT RIGHT: %d",hwheel);
+        
         if (bt_connected) {
-            send_mouse_report(btn, dx, dy, wheel);
+            send_mouse_report(btn, dx, dy, wheel, hwheel);
         }
 
         vTaskDelay(1);
@@ -422,6 +476,7 @@ void app_main(void){
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
     esp_bt_gap_set_device_name("ESP32 MX8650 Mouse");
+
     //set class of device peripheral
     esp_bt_cod_t cod;
     cod.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL;
@@ -458,9 +513,8 @@ void app_main(void){
     const uint8_t *addr = esp_bt_dev_get_address();
     ESP_LOGI(TAG, "BT Adress: %02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     ESP_LOGI(TAG, "Device discoverable. sambungken entos aya di komputer maneh");
+
     //polling task
     xTaskCreate(mouse_polling_task, "POLLING TASK", 4096, NULL, 5, NULL);
-
-
 }
 
