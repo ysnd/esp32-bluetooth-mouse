@@ -38,7 +38,7 @@ void enc_init(void) {
     enc.last_state = (a << 1) | b;
 }
 
-int8_t encoder_read(void) {
+int8_t get_encoder_val(void) {
     uint8_t a = gpio_get_level(ENC_A);
     uint8_t b = gpio_get_level(ENC_B);
 
@@ -67,7 +67,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "ENCODER TESTING READY");
 
     while (1) {
-        int8_t wheel = encoder_read();
+        int8_t wheel = get_encoder_val();
         if (wheel != 0) {
             ESP_LOGI(TAG, "SCROLL: %d", wheel);
         }
