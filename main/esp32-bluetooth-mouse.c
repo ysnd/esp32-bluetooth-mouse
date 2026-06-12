@@ -158,8 +158,8 @@ int8_t read_tilt(void) {
 
     uint8_t raw = 0;
 
-    if (!gpio_get_level(BTN_ML)) raw = 1;
-    if (!gpio_get_level(BTN_MR)) raw = 2;
+    if (!gpio_get_level(BTN_ML)) raw |= 0x01;
+    if (!gpio_get_level(BTN_MR)) raw |= 0x02;
 
     uint32_t now = esp_timer_get_time() / 1000;
 
@@ -173,9 +173,14 @@ int8_t read_tilt(void) {
     }
 
     switch (stable) {
-        case 1: return 1;
-        case 2: return -1;
-        default: return 0;
+        case 0x01: 
+            return -1;
+        case 0x02: 
+            return 1;
+        case 0x03:
+            return 0;//imposible bisa 2 on
+        default: 
+            return 0;
     }
 }
 
