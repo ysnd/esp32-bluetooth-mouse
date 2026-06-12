@@ -146,7 +146,7 @@ void enc_init(void) {
     enc.last_state = (a << 1) | b;
 }
 
-int8_t encoder_read(void) {
+int8_t get_encoder_val(void) {
     uint8_t a = gpio_get_level(ENC_A);
     uint8_t b = gpio_get_level(ENC_B);
 
@@ -383,7 +383,7 @@ void mouse_polling_task(void *pvParameters) {
         if (btn & 0x08) ESP_LOGI(TAG, "THUMB BACK");
         if (btn & 0x10) ESP_LOGI(TAG, "THUMB FORWARD");
         
-        int8_t wheel = encoder_read();
+        int8_t wheel = get_encoder_val();
         if (wheel != 0) {
             ESP_LOGI(TAG, "SCROLL: %d", wheel);
         }
@@ -397,7 +397,7 @@ void mouse_polling_task(void *pvParameters) {
 }
 
 void app_main(void){
-    ESP_LOGI(TAG, "MX8650 MOUSE PoC TEST");
+    ESP_LOGI(TAG, "MX8650 MOUSE TEST");
     btn_init();
     enc_init();
     mx8650_init(); 
@@ -421,7 +421,7 @@ void app_main(void){
     ESP_ERROR_CHECK(esp_bluedroid_init());
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
-    esp_bt_gap_set_device_name("Salvage MX8650 Mouse");
+    esp_bt_gap_set_device_name("ESP32 MX8650 Mouse");
     //set class of device peripheral
     esp_bt_cod_t cod;
     cod.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL;
@@ -429,7 +429,7 @@ void app_main(void){
 
     //init hid parameter
     s_local_param.app_param.name = "Mouse";
-    s_local_param.app_param.description = "DIY Salvage MX8650 Optical Mouse";
+    s_local_param.app_param.description = "DIY ESP32 MX8650 Optical Mouse";
     s_local_param.app_param.provider = "ESP32";
     s_local_param.app_param.subclass = ESP_HID_CLASS_MIC; //mouse subclass
     s_local_param.app_param.desc_list = (uint8_t *)hid_mouse_report_desc;
