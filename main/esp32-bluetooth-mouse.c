@@ -46,6 +46,18 @@ static encoder_t enc = {0};
 #define DELTA_X_REG 0x03
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
+#define CONFIGURATION_REG 0x06
+
+typedef enum {
+    CPI_800 = 0,
+    CPI_1000,
+    CPI_1200,
+    CPI_1600
+} cpi_t;
+
+static cpi_t current_cpi = CPI_800;
+
+static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
 
 static const char *TAG = "MX8650_Mouse_Test";
 
@@ -321,6 +333,32 @@ int8_t mx8650_get_dy(void) {
     return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
 }
 
+//cpi 
+void mx8650_set_cpi(cpi_t cpi) {
+    uint8_t cfg;
+    cfg = mx8650_read_reg(CONFIGURATION_REG);
+
+    cfg &= ~0x03;
+    cfg |= (uint8_t)cpi;
+
+    mx8650_write_reg(CONFIGURATION_REG, cfg);
+
+    current_cpi = cpi;
+    ESP_LOGI(TAG, "CPI ganti -> %d", cpi_table[current_cpi]);
+}
+
+cpi_t mx8650_get_cpi(void) {
+    return current_cpi;
+}
+
+void mx8650_next_cpi(void) {
+    current_cpi = (current_cpi + 1) % 4;
+    mx8650_set_cpi(current_cpi);
+}
+
+
+
+
 //bt HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
     if (!bt_connected) return;
@@ -446,6 +484,7 @@ void mouse_polling_task(void *pvParameters) {
         int8_t hwheel = read_tilt();
         if (hwheel == 1) ESP_LOGI(TAG, "TILT LEFT : %d", hwheel);
         if (hwheel == -1) ESP_LOGI(TAG, "TILT RIGHT: %d",hwheel);
+
         
         if (bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
@@ -460,6 +499,16 @@ void app_main(void){
     btn_init();
     enc_init();
     mx8650_init(); 
+    static bool test_done = false;
+
+    if (!test_done)
+    {
+        test_done = true;
+        mx8650_set_cpi(CPI_1600);
+    }
+    
+    uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
+    ESP_LOGI(TAG, "CFG = 0x%02X", cfg);
 
     //bt init
     bt_hid_mutex = xSemaphoreCreateMutex();
