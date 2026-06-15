@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -58,6 +59,15 @@ typedef enum {
 static cpi_t current_cpi = CPI_800;
 
 static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
+
+typedef enum {
+    DPI_IDLE,
+    DPI_WAIT_HOLD,
+    DPI_WAIT_RELEASE
+} dpi_state_t;
+
+static dpi_state_t dpi_state = DPI_IDLE;
+static uint32_t hold_start = 0;
 
 static const char *TAG = "MX8650_Mouse_Test";
 
@@ -356,7 +366,37 @@ void mx8650_next_cpi(void) {
     mx8650_set_cpi(current_cpi);
 }
 
+void dpi_sm_update(uint8_t btn_state) {
+    bool mmb = btn_state & 0x04;
+    bool rmb = btn_state & 0x02;
+    
+    uint32_t now = esp_timer_get_time() / 1000;
 
+    switch (dpi_state) {
+        case DPI_IDLE:
+            if (mmb && rmb) {
+                hold_start = now;
+                dpi_state = DPI_WAIT_HOLD;
+            }
+            break;
+
+        case DPI_WAIT_HOLD:
+            if (!mmb || !rmb) {
+                dpi_state = DPI_IDLE;
+                ESP_LOGI(TAG, "DPI IDLE");
+            } else if ((now - hold_start) >= 2000) {
+                mx8650_next_cpi();
+                dpi_state = DPI_WAIT_RELEASE;
+                ESP_LOGI(TAG, "DPI Berubah");
+            }
+            break;
+        case DPI_WAIT_RELEASE:
+            if (!mmb || !rmb) {
+                dpi_state = DPI_IDLE;
+            }
+            break;
+    }
+}
 
 
 //bt HID 
@@ -485,6 +525,7 @@ void mouse_polling_task(void *pvParameters) {
         if (hwheel == 1) ESP_LOGI(TAG, "TILT LEFT : %d", hwheel);
         if (hwheel == -1) ESP_LOGI(TAG, "TILT RIGHT: %d",hwheel);
 
+        dpi_sm_update(btn);
         
         if (bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
@@ -499,13 +540,6 @@ void app_main(void){
     btn_init();
     enc_init();
     mx8650_init(); 
-    static bool test_done = false;
-
-    if (!test_done)
-    {
-        test_done = true;
-        mx8650_set_cpi(CPI_1600);
-    }
     
     uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
     ESP_LOGI(TAG, "CFG = 0x%02X", cfg);
