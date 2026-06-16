@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
@@ -13,6 +14,7 @@ const uint8_t SDIO = 23;
 #define DELTA_X_REG 0x03
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
+#define IMAGE_QUALITY_REG 0x07
 
 int8_t dy,dx;
 
@@ -112,6 +114,10 @@ int8_t mx8650_get_dx(void) {
 
 int8_t mx8650_get_dy(void) {
     return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
+}
+
+uint8_t mx8650_get_image_quality(void) {
+    return mx8650_read_reg(IMAGE_QUALITY_REG);
 }
 
 void app_main(void){
