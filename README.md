@@ -18,8 +18,7 @@ DIY Bluetooth Mouse using ESP32 and MX8650 optical sensor and switches form salv
 
 # Prototype
 
-![Prototype1](images/2.jpg)
-![Prototype2](images/1.jpg)
+![Prototype](images/1.jpg)
 
 ## Prototype Assembly
 Current prototype is built using salvaged components from multiple mice. front button assembly and horizontal scroll mechanism are reused from a Logictech old mouse, and the optical sensor assembly from a generic old Bluetooth mouse.
