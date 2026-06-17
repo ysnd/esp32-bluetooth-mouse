@@ -48,6 +48,7 @@ static encoder_t enc = {0};
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
 #define CONFIGURATION_REG 0x06
+#define WRITE_PROTECT_REG 0x09
 
 typedef enum {
     CPI_800 = 0,
@@ -345,6 +346,8 @@ int8_t mx8650_get_dy(void) {
 
 //cpi 
 void mx8650_set_cpi(cpi_t cpi) {
+    //disable write protect 
+    mx8650_write_reg(WRITE_PROTECT_REG, 0x5A);
     uint8_t cfg;
     cfg = mx8650_read_reg(CONFIGURATION_REG);
 
@@ -352,6 +355,9 @@ void mx8650_set_cpi(cpi_t cpi) {
     cfg |= (uint8_t)cpi;
 
     mx8650_write_reg(CONFIGURATION_REG, cfg);
+
+    //enable write protect lagi
+    mx8650_write_reg(WRITE_PROTECT_REG, 0x00);
 
     current_cpi = cpi;
     ESP_LOGI(TAG, "CPI ganti -> %d", cpi_table[current_cpi]);
