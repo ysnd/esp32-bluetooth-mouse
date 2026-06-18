@@ -1,5 +1,5 @@
-#include <stdint.h>
 #include <stdio.h>
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -8,6 +8,7 @@
 #include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "hal/gpio_types.h"
 #include "nvs_flash.h"
 
 #include "esp_bt.h"
@@ -27,6 +28,7 @@ const uint8_t BTN_TF = 5;
 const uint8_t BTN_TB = 19;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
+const uint8_t MOTSWK = 4;
 
 static const int8_t enc_table[16] = {
     0, -1, +1, 0, 
@@ -69,6 +71,7 @@ typedef enum {
 
 static dpi_state_t dpi_state = DPI_IDLE;
 static uint32_t hold_start = 0;
+volatile bool motion_irq = false;
 
 static const char *TAG = "MX8650_Mouse_Test";
 
@@ -315,6 +318,10 @@ void mx8650_init(void) {
     gpio_reset_pin(SDIO);
     gpio_set_direction(SDIO, GPIO_MODE_OUTPUT);
 
+    gpio_reset_pin(MOTSWK);
+    gpio_set_direction(MOTSWK, GPIO_MODE_INPUT);
+    gpio_set_intr_type(MOTSWK, GPIO_INTR_NEGEDGE);
+
     vTaskDelay(pdMS_TO_TICKS(100));
 
     uint8_t pid = mx8650_read_reg(PRODUCT_ID_REG);
@@ -342,6 +349,10 @@ int8_t mx8650_get_dx(void) {
 
 int8_t mx8650_get_dy(void) {
     return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
+}
+
+static void IRAM_ATTR motswk_isr(void *arg) {
+    motion_irq = true;
 }
 
 //cpi 
@@ -508,6 +519,10 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 
 void mouse_polling_task(void *pvParameters) {
     while (1) {
+        if (motion_irq) {
+            motion_irq = false;
+            ESP_LOGI(TAG, "MOTION IRQ");
+        }
         int8_t dy = 0, dx = 0;
         if (mx8650_has_motion()) {
             dx = mx8650_get_dx();
@@ -532,6 +547,13 @@ void mouse_polling_task(void *pvParameters) {
         if (hwheel == -1) ESP_LOGI(TAG, "TILT RIGHT: %d",hwheel);
 
         dpi_sm_update(btn);
+
+        static int8_t last_motswk = -1;
+        int8_t motswk = gpio_get_level(MOTSWK);
+        if (motswk != last_motswk) {
+            ESP_LOGI(TAG, "MOTSWK = %d", motswk);
+            last_motswk = motswk;
+        }
         
         if (bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
@@ -546,6 +568,10 @@ void app_main(void){
     btn_init();
     enc_init();
     mx8650_init(); 
+
+    gpio_install_isr_service(0);
+
+    gpio_isr_handler_add(MOTSWK, motswk_isr, NULL);
     
     uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
     ESP_LOGI(TAG, "CFG = 0x%02X", cfg);
