@@ -71,7 +71,7 @@ typedef enum {
 
 static dpi_state_t dpi_state = DPI_IDLE;
 static uint32_t hold_start = 0;
-volatile bool motion_irq = false;
+static TaskHandle_t motion_task_handle = NULL;
 
 static const char *TAG = "MX8650_Mouse_Test";
 
@@ -352,7 +352,11 @@ int8_t mx8650_get_dy(void) {
 }
 
 static void IRAM_ATTR motswk_isr(void *arg) {
-    motion_irq = true;
+    BaseType_t higher_priority_task_woken = pdFALSE;
+
+    vTaskNotifyGiveFromISR(motion_task_handle, &higher_priority_task_woken);    if (higher_priority_task_woken) {
+        portYIELD_FROM_ISR();
+    }
 }
 
 //cpi 
@@ -517,12 +521,8 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
     }
 }
 
-void mouse_polling_task(void *pvParameters) {
-    while (1) {
-        if (motion_irq) {
-            motion_irq = false;
-            ESP_LOGI(TAG, "MOTION IRQ");
-        }
+void process_motion(void) {
+    while (!gpio_get_level(MOTSWK)) {
         int8_t dy = 0, dx = 0;
         if (mx8650_has_motion()) {
             dx = mx8650_get_dx();
@@ -558,8 +558,14 @@ void mouse_polling_task(void *pvParameters) {
         if (bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
         }
+    }
+}
 
-        vTaskDelay(1);
+void mouse_task(void *pvParameters) {
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); 
+        ESP_LOGI(TAG, "MOTION IRQ");
+        process_motion();
     }
 }
 
@@ -567,11 +573,7 @@ void app_main(void){
     ESP_LOGI(TAG, "MX8650 MOUSE TEST");
     btn_init();
     enc_init();
-    mx8650_init(); 
-
-    gpio_install_isr_service(0);
-
-    gpio_isr_handler_add(MOTSWK, motswk_isr, NULL);
+    mx8650_init();  
     
     uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
     ESP_LOGI(TAG, "CFG = 0x%02X", cfg);
@@ -635,6 +637,9 @@ void app_main(void){
     ESP_LOGI(TAG, "Device discoverable. sambungken entos aya di komputer maneh");
 
     //polling task
-    xTaskCreate(mouse_polling_task, "POLLING TASK", 4096, NULL, 5, NULL);
+    xTaskCreate(mouse_task, "MOTION TASK", 4096, NULL, 5, &motion_task_handle);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(MOTSWK, motswk_isr, NULL);
 }
 
