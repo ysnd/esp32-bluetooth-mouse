@@ -1,4 +1,3 @@
-#include <stdint.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -332,16 +331,15 @@ void mx8650_init(void) {
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
-bool mx8650_has_motion(void) {
-    return (mx8650_read_reg(MOTION_STATUS_REG) & 0x80);
-}
+bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
+    uint8_t motion = mx8650_read_reg(MOTION_STATUS_REG);
 
-int8_t mx8650_get_dx(void) {
-    return (int8_t)mx8650_read_reg(DELTA_X_REG);
-}
-
-int8_t mx8650_get_dy(void) {
-    return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
+    if (!(motion & 0x80)) {
+        return false;
+    }
+    *dx = (int8_t)mx8650_read_reg(DELTA_X_REG);
+    *dy = (int8_t)mx8650_read_reg(DELTA_Y_REG);
+    return true;
 }
 
 //cpi 
@@ -507,15 +505,21 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 }
 
 void mouse_polling_task(void *pvParameters) {
+    uint8_t last_btn = 0;
     while (1) {
-        int8_t dy = 0, dx = 0;
-        if (mx8650_has_motion()) {
-            dx = mx8650_get_dx();
-            dy = mx8650_get_dy();
+        bool report_needed = false;
+        int8_t dx = 0, dy = 0;
+
+        if (mx8650_read_motion(&dx, &dy)) {
+            report_needed = true;
             ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
 
         uint8_t btn = read_btn();
+        if (btn != last_btn) {
+            report_needed = true;
+            last_btn = btn;
+        }
         if (btn & 0x01) ESP_LOGI(TAG, "LEFT CLICK");
         if (btn & 0x02) ESP_LOGI(TAG, "RIGHT CLICK");
         if (btn & 0x04) ESP_LOGI(TAG, "MIDDLE CLICK");
@@ -524,17 +528,21 @@ void mouse_polling_task(void *pvParameters) {
         
         int8_t wheel = get_encoder_val();
         if (wheel != 0) {
+            report_needed = true;
             ESP_LOGI(TAG, "SCROLL: %d", wheel);
         }
 
         int8_t hwheel = read_tilt();
-        if (hwheel == 1) ESP_LOGI(TAG, "TILT LEFT : %d", hwheel);
-        if (hwheel == -1) ESP_LOGI(TAG, "TILT RIGHT: %d",hwheel);
+        if (hwheel != 0) {
+            report_needed = true;
+            ESP_LOGI(TAG, "TILT : %d",hwheel);
+        }
 
         dpi_sm_update(btn);
         
-        if (bt_connected) {
+        if (report_needed && bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
+            ESP_LOGI(TAG, "REPORTED");
         }
 
         vTaskDelay(1);
