@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include "esp_rom_sys.h"
@@ -104,17 +105,17 @@ void mx8650_init(void) {
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
-bool mx8650_has_motion(void) {
-    return (mx8650_read_reg(MOTION_STATUS_REG) & 0x80);
-}
+bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
+    uint8_t motion = mx8650_read_reg(MOTION_STATUS_REG);
 
-int8_t mx8650_get_dx(void) {
-    return (int8_t)mx8650_read_reg(DELTA_X_REG);
+    if (!(motion & 0x80)) {
+        return false;
+    }
+    *dx = (int8_t)mx8650_read_reg(DELTA_X_REG);
+    *dy = (int8_t)mx8650_read_reg(DELTA_Y_REG);
+    return true;
 }
-
-int8_t mx8650_get_dy(void) {
-    return -(int8_t)mx8650_read_reg(DELTA_Y_REG);
-}
+    
 
 uint8_t mx8650_get_image_quality(void) {
     return mx8650_read_reg(IMAGE_QUALITY_REG);
@@ -126,9 +127,7 @@ void app_main(void){
    
     while (1) {
         
-        if (mx8650_has_motion()) {
-            dx = mx8650_get_dx();
-            dy = mx8650_get_dy();
+        if (mx8650_read_motion(&dx, &dy)) {
             ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
         vTaskDelay(1);
