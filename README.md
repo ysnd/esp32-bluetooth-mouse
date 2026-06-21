@@ -36,7 +36,7 @@ Implemented:
 - Adjustable DPI
 
 In Progress:
-- Deep Sleep
+- Sleep & SWKINT wakeup
 
 ## Future Work
 - Battery monitoring
