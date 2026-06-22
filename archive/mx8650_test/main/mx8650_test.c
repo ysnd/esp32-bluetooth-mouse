@@ -16,8 +16,38 @@ const uint8_t SDIO = 23;
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
 #define IMAGE_QUALITY_REG 0x07
+#define CONFIGURATION_REG 0x06
+#define WRITE_PROTECT_REG 0x09
 
-int8_t dy,dx;
+typedef enum {
+    CPI_800 = 0,
+    CPI_1000,
+    CPI_1200,
+    CPI_1600
+} cpi_t;
+
+static cpi_t current_cpi = CPI_800;
+
+static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
+
+typedef enum {
+    DPI_IDLE,
+    DPI_WAIT_HOLD,
+    DPI_WAIT_RELEASE
+} dpi_state_t;
+
+static dpi_state_t dpi_state = DPI_IDLE;
+
+typedef enum {
+    MX8650_SLEEP_DISABLED,
+    MX8650_SLEEP1_ONLY,
+    MX8650_SLEEP1_SLEEP2
+} mx8650_sleep_mode_t;
+
+typedef enum {
+    MX8650_MOTSWK,
+    MX8650_SWKINT
+} mx8650_motswk_mode_t;
 
 static const char *TAG = "MX8650_test";
 
@@ -115,7 +145,54 @@ bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
     *dy = (int8_t)mx8650_read_reg(DELTA_Y_REG);
     return true;
 }
-    
+
+//cpi 
+void mx8650_set_cpi(cpi_t cpi) {
+    //disable write protect 
+    mx8650_write_reg(WRITE_PROTECT_REG, 0x5A);
+    uint8_t cfg;
+    cfg = mx8650_read_reg(CONFIGURATION_REG);
+
+    cfg &= ~0x03;
+    cfg |= (uint8_t)cpi;
+
+    mx8650_write_reg(CONFIGURATION_REG, cfg);
+
+    //enable write protect lagi
+    mx8650_write_reg(WRITE_PROTECT_REG, 0x00);
+
+    current_cpi = cpi;
+    ESP_LOGI(TAG, "CPI ganti -> %d", cpi_table[current_cpi]);
+}
+
+cpi_t mx8650_get_cpi(void) {
+    return current_cpi;
+}
+
+static void mx8650_set_sleep_mode(mx8650_sleep_mode_t mode) {
+    uint8_t om = (1 << 7) | (1 << 5);
+    switch (mode) {
+        case MX8650_SLEEP_DISABLED:
+            break;
+        case MX8650_SLEEP1_ONLY:
+            om |= (1 << 4);
+            break;
+        case MX8650_SLEEP1_SLEEP2:
+            om |= (1 << 4) | (1 << 3);
+    }
+    mx8650_write_reg(OPERATION_MODE_REG, om);
+}
+
+void mx8650_set_motswk(mx8650_motswk_mode_t mode) {
+    uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
+
+    if (mode == MX8650_SWKINT) {
+        cfg |= (1 << 6);
+    } else {
+        cfg &= ~(1 << 6);
+    }
+    mx8650_write_reg(CONFIGURATION_REG, cfg);
+}
 
 uint8_t mx8650_get_image_quality(void) {
     return mx8650_read_reg(IMAGE_QUALITY_REG);
@@ -126,7 +203,7 @@ void app_main(void){
     mx8650_init();
    
     while (1) {
-        
+        int8_t dx = 0, dy=0; 
         if (mx8650_read_motion(&dx, &dy)) {
             ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
