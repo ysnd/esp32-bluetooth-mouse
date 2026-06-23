@@ -1,4 +1,3 @@
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include "esp_rom_sys.h"
@@ -17,7 +16,28 @@ const uint8_t SDIO = 23;
 #define OPERATION_MODE_REG 0x05
 #define IMAGE_QUALITY_REG 0x07
 #define CONFIGURATION_REG 0x06
+#define OPERATION_STATE_REG 0x08
 #define WRITE_PROTECT_REG 0x09
+
+#define MX8650_LED_CTR (1 << 7)
+#define MX8650_BIT6_MUST0 (0 << 6)
+#define MX8650_BIT5_MUST1 (1 << 5)
+
+#define MX8650_SLP_EN (1 << 4)
+#define MX8650_SLP2_EN (1 << 3)
+#define MX8650_SLP2_MU (1 << 2)
+#define MX8650_SLP1_MU (1 << 1)
+#define MX8650_WAKEUP (1 << 0)
+
+#define MX8650_MOTSWK_BIT (1 << 6)
+
+#define STATE_OPSTATE_MASK 0x07
+#define STATE_SLP_STATE (1 << 3)
+
+#define STATE_NORMAL 0x00
+#define STATE_ENTRY_SLP1 0x01
+#define STATE_ENTRY_SLP2 0x02
+#define STATE_SLEEP 0x04
 
 typedef enum {
     CPI_800 = 0,
@@ -45,8 +65,8 @@ typedef enum {
 } mx8650_sleep_mode_t;
 
 typedef enum {
-    MX8650_MOTSWK,
-    MX8650_SWKINT
+    MX8650_MOTSWK_MOTION = 0,
+    MX8650_MOTSWK_SWKINT
 } mx8650_motswk_mode_t;
 
 static const char *TAG = "MX8650_test";
@@ -131,7 +151,8 @@ void mx8650_init(void) {
         }
         return;
     }
-    mx8650_write_reg(OPERATION_MODE_REG, 0xB8); //force normal mode led on sleep disable
+    mx8650_write_reg(OPERATION_MODE_REG, MX8650_LED_CTR | MX8650_BIT5_MUST1);
+    
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
@@ -152,7 +173,6 @@ void mx8650_set_cpi(cpi_t cpi) {
     mx8650_write_reg(WRITE_PROTECT_REG, 0x5A);
     uint8_t cfg;
     cfg = mx8650_read_reg(CONFIGURATION_REG);
-
     cfg &= ~0x03;
     cfg |= (uint8_t)cpi;
 
@@ -170,15 +190,15 @@ cpi_t mx8650_get_cpi(void) {
 }
 
 static void mx8650_set_sleep_mode(mx8650_sleep_mode_t mode) {
-    uint8_t om = (1 << 7) | (1 << 5);
+    uint8_t om = MX8650_LED_CTR | MX8650_BIT5_MUST1;
     switch (mode) {
         case MX8650_SLEEP_DISABLED:
             break;
         case MX8650_SLEEP1_ONLY:
-            om |= (1 << 4);
+            om |= MX8650_SLP_EN;
             break;
         case MX8650_SLEEP1_SLEEP2:
-            om |= (1 << 4) | (1 << 3);
+            om |= MX8650_SLP_EN | MX8650_SLP2_EN;
     }
     mx8650_write_reg(OPERATION_MODE_REG, om);
 }
@@ -186,12 +206,37 @@ static void mx8650_set_sleep_mode(mx8650_sleep_mode_t mode) {
 void mx8650_set_motswk(mx8650_motswk_mode_t mode) {
     uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
 
-    if (mode == MX8650_SWKINT) {
-        cfg |= (1 << 6);
+    if (mode == MX8650_MOTSWK_SWKINT) {
+        cfg |= MX8650_MOTSWK_BIT;
     } else {
-        cfg &= ~(1 << 6);
+        cfg &= ~MX8650_MOTSWK_BIT;
     }
     mx8650_write_reg(CONFIGURATION_REG, cfg);
+}
+
+void mx8650_print_state(void) {
+    uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
+
+    uint8_t state = s & STATE_OPSTATE_MASK;
+    bool sleep2 = s & STATE_SLP_STATE;
+    
+    switch (state) {
+        case STATE_NORMAL:
+            ESP_LOGI(TAG, "NORMAL");
+            break;
+        case STATE_ENTRY_SLP1:
+            ESP_LOGI(TAG, "ENTRY SLEEP1");
+            break;
+        case STATE_ENTRY_SLP2:
+            ESP_LOGI(TAG, "ENTRY SLEEP2");
+            break;
+        case STATE_SLEEP:
+            ESP_LOGI(TAG, "%s", sleep2 ? "SLEEP2" : "SLEEP1");
+            break;
+        default:
+            ESP_LOGI(TAG, "UNKNOWN");
+            break;
+    }
 }
 
 uint8_t mx8650_get_image_quality(void) {
@@ -201,6 +246,7 @@ uint8_t mx8650_get_image_quality(void) {
 void app_main(void){
     ESP_LOGI(TAG, "MX8650 SENSOR TEST");
     mx8650_init();
+    mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
    
     while (1) {
         int8_t dx = 0, dy=0; 
