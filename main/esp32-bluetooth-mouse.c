@@ -47,7 +47,25 @@ static encoder_t enc = {0};
 #define DELTA_Y_REG 0x04
 #define OPERATION_MODE_REG 0x05
 #define CONFIGURATION_REG 0x06
+#define OPERATION_STATE_REG 0x08
 #define WRITE_PROTECT_REG 0x09
+
+#define MX8650_LED_CTR (1 << 7)
+#define MX8650_BIT6_MUST0 (0 << 6)
+#define MX8650_BIT5_MUST1 (1 << 5)
+
+#define MX8650_SLP_EN (1 << 4)
+#define MX8650_SLP2_EN (1 << 3)
+
+#define MX8650_MOTSWK_BIT (1 << 6)
+
+#define STATE_OPSTATE_MASK 0x07
+#define STATE_SLP_STATE (1 << 3)
+
+#define STATE_NORMAL 0x00
+#define STATE_ENTRY_SLP1 0x01
+#define STATE_ENTRY_SLP2 0x02
+#define STATE_SLEEP 0x04
 
 typedef enum {
     CPI_800 = 0,
@@ -68,6 +86,17 @@ typedef enum {
 
 static dpi_state_t dpi_state = DPI_IDLE;
 static uint32_t hold_start = 0;
+
+typedef enum {
+    MX8650_SLEEP_DISABLED,
+    MX8650_SLEEP1_ONLY,
+    MX8650_SLEEP1_SLEEP2
+} mx8650_sleep_mode_t;
+
+typedef enum {
+    MX8650_MOTSWK_MOTION = 0,
+    MX8650_MOTSWK_SWKINT
+} mx8650_motswk_mode_t;
 
 static const char *TAG = "MX8650_Mouse_Test";
 
@@ -327,7 +356,7 @@ void mx8650_init(void) {
         }
         return;
     }
-    mx8650_write_reg(OPERATION_MODE_REG, 0xB8); //force normal mode led on sleep disable
+    mx8650_write_reg(OPERATION_MODE_REG, MX8650_LED_CTR | MX8650_BIT5_MUST1);
     ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
@@ -402,6 +431,55 @@ void dpi_sm_update(uint8_t btn_state) {
     }
 }
 
+static void mx8650_set_sleep_mode(mx8650_sleep_mode_t mode) {
+    uint8_t om = MX8650_LED_CTR | MX8650_BIT5_MUST1;
+    switch (mode) {
+        case MX8650_SLEEP_DISABLED:
+            break;
+        case MX8650_SLEEP1_ONLY:
+            om |= MX8650_SLP_EN;
+            break;
+        case MX8650_SLEEP1_SLEEP2:
+            om |= MX8650_SLP_EN | MX8650_SLP2_EN;
+    }
+    mx8650_write_reg(OPERATION_MODE_REG, om);
+}
+
+void mx8650_set_motswk(mx8650_motswk_mode_t mode) {
+    uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
+
+    if (mode == MX8650_MOTSWK_SWKINT) {
+        cfg |= MX8650_MOTSWK_BIT;
+    } else {
+        cfg &= ~MX8650_MOTSWK_BIT;
+    }
+    mx8650_write_reg(CONFIGURATION_REG, cfg);
+}
+
+void mx8650_print_state(void) {
+    uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
+
+    uint8_t state = s & STATE_OPSTATE_MASK;
+    bool sleep2 = s & STATE_SLP_STATE;
+    
+    switch (state) {
+        case STATE_NORMAL:
+            ESP_LOGI(TAG, "NORMAL");
+            break;
+        case STATE_ENTRY_SLP1:
+            ESP_LOGI(TAG, "ENTRY SLEEP1");
+            break;
+        case STATE_ENTRY_SLP2:
+            ESP_LOGI(TAG, "ENTRY SLEEP2");
+            break;
+        case STATE_SLEEP:
+            ESP_LOGI(TAG, "%s", sleep2 ? "SLEEP2" : "SLEEP1");
+            break;
+        default:
+            ESP_LOGI(TAG, "UNKNOWN");
+            break;
+    }
+}
 
 //bt HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
@@ -539,7 +617,6 @@ void mouse_polling_task(void *pvParameters) {
         }
 
         dpi_sm_update(btn);
-        
         if (report_needed && bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
             ESP_LOGI(TAG, "REPORTED");
@@ -553,11 +630,9 @@ void app_main(void){
     ESP_LOGI(TAG, "MX8650 MOUSE TEST");
     btn_init();
     enc_init();
-    mx8650_init(); 
+    mx8650_init();
+    mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
     
-    uint8_t cfg = mx8650_read_reg(CONFIGURATION_REG);
-    ESP_LOGI(TAG, "CFG = 0x%02X", cfg);
-
     //bt init
     bt_hid_mutex = xSemaphoreCreateMutex();
 
