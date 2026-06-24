@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <string.h>
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -7,6 +9,7 @@
 #include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_sleep.h"
 #include "nvs_flash.h"
 
 #include "esp_bt.h"
@@ -15,6 +18,7 @@
 #include "esp_gap_bt_api.h"
 #include "esp_hidd_api.h"
 
+const uint8_t MOTSWK = 4;
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
 const uint8_t BTN_L = 21;
@@ -26,20 +30,6 @@ const uint8_t BTN_TF = 5;
 const uint8_t BTN_TB = 19;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
-
-static const int8_t enc_table[16] = {
-    0, -1, +1, 0, 
-    +1, 0, 0, -1,
-    -1, 0, 0, +1,
-    0, +1, -1, 0
-};
-
-typedef struct {
-    uint8_t last_state;
-    int32_t count;
-} encoder_t;
-
-static encoder_t enc = {0};
 
 #define PRODUCT_ID_REG 0x00
 #define MOTION_STATUS_REG 0x02
@@ -67,16 +57,15 @@ static encoder_t enc = {0};
 #define STATE_ENTRY_SLP2 0x02
 #define STATE_SLEEP 0x04
 
+#define IDLE_TIMEOUT_MS 65000
+
+
 typedef enum {
     CPI_800 = 0,
     CPI_1000,
     CPI_1200,
     CPI_1600
 } cpi_t;
-
-static cpi_t current_cpi = CPI_800;
-
-static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
 
 typedef enum {
     DPI_IDLE,
@@ -98,7 +87,30 @@ typedef enum {
     MX8650_MOTSWK_SWKINT
 } mx8650_motswk_mode_t;
 
+typedef enum {
+    ESP_ACTIVE,
+    ESP_LIGHT_SLEEP,
+} esp_power_state_t;
+
+typedef struct {
+    uint8_t last_state;
+    int32_t count;
+} encoder_t;
+
+static encoder_t enc = {0};
+
+static const int8_t enc_table[16] = {
+    0, -1, +1, 0, 
+    +1, 0, 0, -1,
+    -1, 0, 0, +1,
+    0, +1, -1, 0
+};
+
 static const char *TAG = "MX8650_Mouse_Test";
+static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
+static cpi_t current_cpi = CPI_800;
+static esp_power_state_t esp_state = ESP_ACTIVE;
+static uint32_t last_activity_ms = 0;
 
 //HID report descriptor
 static const uint8_t hid_mouse_report_desc[] = {
@@ -233,6 +245,12 @@ int8_t read_tilt(void) {
         default: 
             return 0;
     }
+}
+
+void motswk_init(void) {
+    gpio_reset_pin(MOTSWK);
+    gpio_set_direction(MOTSWK, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(MOTSWK, GPIO_PULLUP_ONLY);// SWKINT active low
 }
 
 //Encoder
@@ -481,6 +499,35 @@ void mx8650_print_state(void) {
     }
 }
 
+bool mx8650_is_sleeping(void) {
+    uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
+    return ((s & STATE_OPSTATE_MASK) == STATE_SLEEP);
+}
+
+void mx8650_force_wakeup(void) {
+    uint8_t om = mx8650_read_reg(OPERATION_MODE_REG);
+    om |= (1 << 0);
+    mx8650_write_reg(OPERATION_MODE_REG, om);
+}
+
+void enter_light_sleep(void) {
+    ESP_LOGI(TAG, "Entering light sleep...");
+
+    vTaskDelay(pdMS_TO_TICKS(200));
+    mx8650_print_state();
+
+    esp_sleep_enable_ext0_wakeup(MOTSWK, 0);
+
+    esp_state = ESP_LIGHT_SLEEP;
+    esp_light_sleep_start();
+
+    //resume here after wakeup 
+    esp_state = ESP_ACTIVE;
+    ESP_LOGI(TAG, "Wakeup from light sleep cause: %d", esp_sleep_get_wakeup_cause());
+    last_activity_ms = esp_timer_get_time() /1000;
+
+}
+
 //bt HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
     if (!bt_connected) return;
@@ -539,11 +586,13 @@ static void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param
         } else {
             ESP_LOGE(TAG, "Connection gagal, status : %d", param->open.status);
         }
+        ESP_LOGW(TAG, "HID OPEN");
         break;
 
     case ESP_HIDD_CLOSE_EVT:
         ESP_LOGI(TAG, "Disconected");
         bt_connected = false;
+        ESP_LOGW(TAG, "HID CLOSE!");
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         break;
 
@@ -584,18 +633,23 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 
 void mouse_polling_task(void *pvParameters) {
     uint8_t last_btn = 0;
+    last_activity_ms = esp_timer_get_time() / 1000;
+
     while (1) {
         bool report_needed = false;
         int8_t dx = 0, dy = 0;
-
+        bool had_activity = false;
+        
         if (mx8650_read_motion(&dx, &dy)) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
 
         uint8_t btn = read_btn();
         if (btn != last_btn) {
             report_needed = true;
+            had_activity = true;
             last_btn = btn;
         }
         if (btn & 0x01) ESP_LOGI(TAG, "LEFT CLICK");
@@ -607,12 +661,14 @@ void mouse_polling_task(void *pvParameters) {
         int8_t wheel = get_encoder_val();
         if (wheel != 0) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGI(TAG, "SCROLL: %d", wheel);
         }
 
         int8_t hwheel = read_tilt();
         if (hwheel != 0) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGI(TAG, "TILT : %d",hwheel);
         }
 
@@ -621,9 +677,28 @@ void mouse_polling_task(void *pvParameters) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
             ESP_LOGI(TAG, "REPORTED");
         }
+        uint32_t now = esp_timer_get_time() / 1000;
 
-        vTaskDelay(1);
-    }
+        switch (esp_state) {
+            case ESP_ACTIVE:
+                if (had_activity) {
+                    last_activity_ms = now;
+                }
+                if (now - last_activity_ms > IDLE_TIMEOUT_MS) {
+                    enter_light_sleep();
+                }
+                break;
+            case ESP_LIGHT_SLEEP:
+                //sleep
+                break;
+        }
+        if (had_activity) {
+            vTaskDelay(1);
+        
+        } else {
+            vTaskDelay(5);
+        }
+    }   
 }
 
 void app_main(void){
@@ -632,6 +707,8 @@ void app_main(void){
     enc_init();
     mx8650_init();
     mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
+    mx8650_set_motswk(MX8650_MOTSWK_SWKINT);
+    motswk_init();
     
     //bt init
     bt_hid_mutex = xSemaphoreCreateMutex();

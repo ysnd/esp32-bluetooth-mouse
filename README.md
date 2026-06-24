@@ -38,6 +38,14 @@ Implemented:
 In Progress:
 - Sleep & SWKINT wakeup
 
+Finding in this version:
+- SWKINT correct
+- ESP32 wakes correctly
+- HID repports resume after wakeup but BT Classic connection eventually times out
+
+Conclusion:
+BT Classic HID is not suitable for maintaining connection across light sleep.
+
 ## Future Work
 - Battery monitoring
 - Deep Sleep
