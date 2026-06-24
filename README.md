@@ -36,7 +36,7 @@ Implemented:
 - Adjustable DPI
 
 In Progress:
-- Sleep & SWKINT wakeup
+- Power Management
 
 ## Future Work
 - Power Management
