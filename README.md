@@ -39,6 +39,6 @@ In Progress:
 - Sleep & SWKINT wakeup
 
 ## Future Work
-- Battery monitoring
-- Deep Sleep
+- Power Management
 - BLE migration
+- Battery status
