@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include "esp_log_level.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -27,20 +26,6 @@ const uint8_t BTN_TF = 5;
 const uint8_t BTN_TB = 19;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
-
-static const int8_t enc_table[16] = {
-    0, -1, +1, 0, 
-    +1, 0, 0, -1,
-    -1, 0, 0, +1,
-    0, +1, -1, 0
-};
-
-typedef struct {
-    uint8_t last_state;
-    int32_t count;
-} encoder_t;
-
-static encoder_t enc = {0};
 
 #define PRODUCT_ID_REG 0x00
 #define MOTION_STATUS_REG 0x02
@@ -75,18 +60,11 @@ typedef enum {
     CPI_1600
 } cpi_t;
 
-static cpi_t current_cpi = CPI_800;
-
-static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
-
 typedef enum {
     DPI_IDLE,
     DPI_WAIT_HOLD,
     DPI_WAIT_RELEASE
 } dpi_state_t;
-
-static dpi_state_t dpi_state = DPI_IDLE;
-static uint32_t hold_start = 0;
 
 typedef enum {
     MX8650_SLEEP_DISABLED,
@@ -99,7 +77,32 @@ typedef enum {
     MX8650_MOTSWK_SWKINT
 } mx8650_motswk_mode_t;
 
+typedef enum {
+    POLL_ACTIVE,
+    POLL_PENDING_IDLE,
+    POLL_DEEP_IDLE
+} poll_state_t;
+
+typedef struct {
+    uint8_t last_state;
+    int32_t count;
+} encoder_t;
+
+static const int8_t enc_table[16] = {
+    0, -1, +1, 0, 
+    +1, 0, 0, -1,
+    -1, 0, 0, +1,
+    0, +1, -1, 0
+};
+
 static const char *TAG = "MX8650_Mouse_Test";
+static encoder_t enc = {0};
+static cpi_t current_cpi = CPI_800;
+static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
+static dpi_state_t dpi_state = DPI_IDLE;
+static uint32_t hold_start = 0;
+static poll_state_t poll_state = POLL_ACTIVE;
+static uint32_t idle_counter = 0;
 
 //HID report descriptor
 static const uint8_t hid_mouse_report_desc[] = {
@@ -358,7 +361,7 @@ void mx8650_init(void) {
         return;
     }
     mx8650_write_reg(OPERATION_MODE_REG, MX8650_LED_CTR | MX8650_BIT5_MUST1);
-    ESP_LOGD(TAG, "MX8650 SENSOR READY");
+    ESP_LOGI(TAG, "MX8650 SENSOR READY");
 }
 
 bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
@@ -482,6 +485,11 @@ void mx8650_print_state(void) {
     }
 }
 
+static bool mx8650_is_in_sleep(void) {
+    uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
+    return (s & STATE_OPSTATE_MASK) == STATE_SLEEP;
+}
+
 //bt HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
     if (!bt_connected) return;
@@ -585,18 +593,22 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 
 void mouse_polling_task(void *pvParameters) {
     uint8_t last_btn = 0;
+    
     while (1) {
         bool report_needed = false;
         int8_t dx = 0, dy = 0;
+        bool had_activity = false;
 
         if (mx8650_read_motion(&dx, &dy)) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGD(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
 
         uint8_t btn = read_btn();
         if (btn != last_btn) {
             report_needed = true;
+            had_activity = true;
             last_btn = btn;
         }
         if (btn & 0x01) ESP_LOGD(TAG, "LEFT CLICK");
@@ -608,22 +620,59 @@ void mouse_polling_task(void *pvParameters) {
         int8_t wheel = get_encoder_val();
         if (wheel != 0) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGD(TAG, "SCROLL: %d", wheel);
         }
 
         int8_t hwheel = read_tilt();
         if (hwheel != 0) {
             report_needed = true;
+            had_activity = true;
             ESP_LOGD(TAG, "TILT : %d",hwheel);
         }
 
         dpi_sm_update(btn);
+
         if (report_needed && bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
             ESP_LOGD(TAG, "REPORTED");
         }
 
-        vTaskDelay(1);
+        if (had_activity) {
+            poll_state = POLL_ACTIVE;
+            idle_counter = 0;
+        } else {
+            idle_counter++;
+        }
+
+        switch (poll_state) {
+            case POLL_ACTIVE:
+                if (idle_counter >= 50) {
+                    poll_state = POLL_PENDING_IDLE;
+                    idle_counter = 0;
+                }
+                break;
+            case POLL_PENDING_IDLE:
+                if (idle_counter >= 250 && mx8650_is_in_sleep()) {
+                    poll_state = POLL_DEEP_IDLE;
+                    idle_counter = 0;
+                }
+                break;
+            case POLL_DEEP_IDLE:
+                break;
+        }
+
+        switch (poll_state) {
+            case POLL_ACTIVE:
+                vTaskDelay(pdMS_TO_TICKS(4));
+                break;
+            case POLL_PENDING_IDLE:
+                vTaskDelay(pdMS_TO_TICKS(20));
+                break;
+            case POLL_DEEP_IDLE:
+                vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+        }
     }
 }
 
@@ -633,6 +682,7 @@ void app_main(void){
     enc_init();
     mx8650_init();
     mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
+    ESP_LOGI(TAG, "Tick rate: %d Hz, 1 tick = %d ms", configTICK_RATE_HZ, portTICK_PERIOD_MS);
     
     //bt init
     bt_hid_mutex = xSemaphoreCreateMutex();
