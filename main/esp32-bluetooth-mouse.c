@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "esp_log_level.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -357,7 +358,7 @@ void mx8650_init(void) {
         return;
     }
     mx8650_write_reg(OPERATION_MODE_REG, MX8650_LED_CTR | MX8650_BIT5_MUST1);
-    ESP_LOGI(TAG, "MX8650 SENSOR READY");
+    ESP_LOGD(TAG, "MX8650 SENSOR READY");
 }
 
 bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
@@ -416,11 +417,11 @@ void dpi_sm_update(uint8_t btn_state) {
         case DPI_WAIT_HOLD:
             if (!mmb || !rmb) {
                 dpi_state = DPI_IDLE;
-                ESP_LOGI(TAG, "DPI IDLE");
+                ESP_LOGD(TAG, "DPI IDLE");
             } else if ((now - hold_start) >= 2000) {
                 mx8650_next_cpi();
                 dpi_state = DPI_WAIT_RELEASE;
-                ESP_LOGI(TAG, "DPI Berubah");
+                ESP_LOGD(TAG, "DPI Berubah");
             }
             break;
         case DPI_WAIT_RELEASE:
@@ -590,7 +591,7 @@ void mouse_polling_task(void *pvParameters) {
 
         if (mx8650_read_motion(&dx, &dy)) {
             report_needed = true;
-            ESP_LOGI(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
+            ESP_LOGD(TAG, "MOVE -> X: %d, Y: %d", dx, dy);
         }
 
         uint8_t btn = read_btn();
@@ -598,28 +599,28 @@ void mouse_polling_task(void *pvParameters) {
             report_needed = true;
             last_btn = btn;
         }
-        if (btn & 0x01) ESP_LOGI(TAG, "LEFT CLICK");
-        if (btn & 0x02) ESP_LOGI(TAG, "RIGHT CLICK");
-        if (btn & 0x04) ESP_LOGI(TAG, "MIDDLE CLICK");
-        if (btn & 0x08) ESP_LOGI(TAG, "THUMB BACK");
-        if (btn & 0x10) ESP_LOGI(TAG, "THUMB FORWARD");
+        if (btn & 0x01) ESP_LOGD(TAG, "LEFT CLICK");
+        if (btn & 0x02) ESP_LOGD(TAG, "RIGHT CLICK");
+        if (btn & 0x04) ESP_LOGD(TAG, "MIDDLE CLICK");
+        if (btn & 0x08) ESP_LOGD(TAG, "THUMB BACK");
+        if (btn & 0x10) ESP_LOGD(TAG, "THUMB FORWARD");
         
         int8_t wheel = get_encoder_val();
         if (wheel != 0) {
             report_needed = true;
-            ESP_LOGI(TAG, "SCROLL: %d", wheel);
+            ESP_LOGD(TAG, "SCROLL: %d", wheel);
         }
 
         int8_t hwheel = read_tilt();
         if (hwheel != 0) {
             report_needed = true;
-            ESP_LOGI(TAG, "TILT : %d",hwheel);
+            ESP_LOGD(TAG, "TILT : %d",hwheel);
         }
 
         dpi_sm_update(btn);
         if (report_needed && bt_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
-            ESP_LOGI(TAG, "REPORTED");
+            ESP_LOGD(TAG, "REPORTED");
         }
 
         vTaskDelay(1);
