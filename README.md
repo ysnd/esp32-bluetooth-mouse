@@ -34,11 +34,11 @@ Implemented:
 - Vertical scroll
 - Horizontal scroll
 - Adjustable DPI
+- Adaptive polling
 
 In Progress:
-- Power Management
+- BLE migration
 
 ## Future Work
-- Power Management
 - BLE migration
 - Battery status
