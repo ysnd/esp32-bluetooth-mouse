@@ -270,12 +270,12 @@ int8_t get_encoder_val(void) {
 
     if (enc.count >= 2) {
         enc.count -= 2;
-        return 1;
+        return -1;
     }
 
     if (enc.count <= -2) {
         enc.count += 2;
-        return -1;
+        return 1;
     }
     return 0;
 }
@@ -372,7 +372,7 @@ bool mx8650_read_motion(int8_t *dx, int8_t *dy) {
         return false;
     }
     *dx = (int8_t)mx8650_read_reg(DELTA_X_REG);
-    *dy = (int8_t)mx8650_read_reg(DELTA_Y_REG);
+    *dy = -(int8_t)mx8650_read_reg(DELTA_Y_REG);
     return true;
 }
 
