@@ -1,4 +1,6 @@
+#include <stdint.h>
 #include <stdio.h>
+#include "esp_hid_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -11,10 +13,19 @@
 #include "nvs_flash.h"
 
 #include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
-#include "esp_gap_bt_api.h"
-#include "esp_hidd_api.h"
+#include "host/ble_hs.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "esp_hidd.h"
+#include "esp_hidd_common.h"
+#include "host/ble_gap.h"
+#include "host/ble_hs_adv.h"
+#include "host/ble_sm.h"
+#include "host/ble_store.h"
+#include "nimble/ble.h"
+#include "esp_nimble_hci.h"
+#include "portmacro.h"
+#include "services/gap/ble_svc_gap.h"
 
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
@@ -158,19 +169,38 @@ static const uint8_t hid_mouse_report_desc[] = {
 };
 
 #define HID_MOUSE_REPORT_DESC_LEN sizeof(hid_mouse_report_desc)
-#define REPORT_PROTOCOL_MOUSE_REPORT_SIZE 5
+#define MOUSE_REPORT_SIZE 5
+#define MOUSE_MAP_INDEX 0 
+#define MOUSE_REPORT_ID 0 
 
-//lokal parameter struct  
+static esp_hid_raw_report_map_t ble_report_maps[] = {
+    {
+        .data = hid_mouse_report_desc,
+        .len = HID_MOUSE_REPORT_DESC_LEN
+    }
+};
+
+static esp_hid_device_config_t ble_hid_cfg = {
+    .vendor_id = 0x16C0,
+    .product_id = 0x05DF,
+    .version = 0x0100,
+    .device_name = "MX8650 Mouse",
+    .manufacturer_name = "DIY ESP32 MX8650",
+    .serial_number = "1234567890",
+    .report_maps = ble_report_maps,
+    .report_maps_len = 1,
+};
+
 typedef struct{
-    esp_hidd_app_param_t app_param;
-    esp_hidd_qos_param_t both_qos;
-    uint8_t protocol_mode;
-    uint8_t buffer[8];
+    esp_hidd_dev_t *hid_dev;
+    TaskHandle_t task_hdl;
+    uint8_t buffer[MOUSE_REPORT_SIZE];
 } local_param_t;
 
-static local_param_t s_local_param = {0};
-static SemaphoreHandle_t bt_hid_mutex = NULL;
-static bool bt_connected = false;
+static local_param_t s_ble_hid_param = {0};
+static SemaphoreHandle_t ble_hid_mutex = NULL;
+static bool ble_connected = false;
+static uint16_t s_conn_handle = 0;
 
 //Button
 void btn_init(void) {
@@ -493,32 +523,25 @@ static bool mx8650_is_in_sleep(void) {
 
 //bt HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
-    if (!bt_connected) return;
+    if (!ble_connected || s_ble_hid_param.hid_dev == NULL) return;
 
-    xSemaphoreTake(bt_hid_mutex, portMAX_DELAY);
+    xSemaphoreTake(ble_hid_mutex, portMAX_DELAY);
+    s_ble_hid_param.buffer[0] = buttons;
+    s_ble_hid_param.buffer[1] = (uint8_t)dx;
+    s_ble_hid_param.buffer[2] = (uint8_t)dy;
+    s_ble_hid_param.buffer[3] = (uint8_t)wheel;
+    s_ble_hid_param.buffer[4] = (uint8_t)hwheel;
 
-    uint8_t report_id;
-    uint16_t report_size;
+    esp_hidd_dev_input_set(s_ble_hid_param.hid_dev, MOUSE_MAP_INDEX, MOUSE_REPORT_ID, s_ble_hid_param.buffer, MOUSE_REPORT_SIZE);
+    xSemaphoreGive(ble_hid_mutex);
+}
 
-    if (s_local_param.protocol_mode == ESP_HIDD_REPORT_MODE) {
-        report_id = 0;
-        report_size = REPORT_PROTOCOL_MOUSE_REPORT_SIZE;
-        s_local_param.buffer[0] = buttons;
-        s_local_param.buffer[1] = dx;
-        s_local_param.buffer[2] = dy;
-        s_local_param.buffer[3] = wheel;
-        s_local_param.buffer[4] = hwheel;
-    } else {
-        //boot mode
-        report_id = ESP_HIDD_BOOT_REPORT_ID_MOUSE;
-        report_size = ESP_HIDD_BOOT_REPORT_SIZE_MOUSE - 1;
-        s_local_param.buffer[0] = buttons;
-        s_local_param.buffer[1] = dx;
-        s_local_param.buffer[2] = dy;
-    }
+void ble_hid_task_start_up(void) {
+    ESP_LOGI(TAG, "ble_hid_task_start_up (no-op, polling task selalu jalan)");
+}
 
-    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, report_id, report_size, s_local_param.buffer);
-    xSemaphoreGive(bt_hid_mutex);
+void ble_hid_task_shut_down(void) {
+    ESP_LOGI(TAG, "ble_hid_task_shut_down (no-op)");
 }
 
 static void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
