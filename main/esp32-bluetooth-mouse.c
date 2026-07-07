@@ -1,6 +1,4 @@
-#include <stdint.h>
 #include <stdio.h>
-#include "esp_hid_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -17,14 +15,12 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "esp_hidd.h"
-#include "esp_hidd_common.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs_adv.h"
 #include "host/ble_sm.h"
 #include "host/ble_store.h"
 #include "nimble/ble.h"
 #include "esp_nimble_hci.h"
-#include "portmacro.h"
 #include "services/gap/ble_svc_gap.h"
 
 const uint8_t SCLK = 18;
@@ -382,7 +378,7 @@ void mx8650_init(void) {
 
     uint8_t pid = mx8650_read_reg(PRODUCT_ID_REG);
     ESP_LOGI(TAG, "Product ID: 0x%02X (harus 0x30)", pid);
-   if (pid != 0x30) {
+    if (pid != 0x30) {
         ESP_LOGW(TAG, "MX8650 teu baleg konek na cek wairing maneh! nyobian resync");
         mx8650_resync();
         pid = mx8650_read_reg(PRODUCT_ID_REG);
@@ -517,11 +513,11 @@ void mx8650_print_state(void) {
 }
 
 static bool mx8650_is_in_sleep(void) {
-    uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
+uint8_t s = mx8650_read_reg(OPERATION_STATE_REG);
     return (s & STATE_OPSTATE_MASK) == STATE_SLEEP;
 }
 
-//bt HID 
+//ble HID 
 void send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel, int8_t hwheel) {
     if (!ble_connected || s_ble_hid_param.hid_dev == NULL) return;
 
@@ -544,76 +540,191 @@ void ble_hid_task_shut_down(void) {
     ESP_LOGI(TAG, "ble_hid_task_shut_down (no-op)");
 }
 
-static void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
-    switch (event) {
-    case ESP_HIDD_INIT_EVT:
-        if (param->init.status == ESP_HIDD_SUCCESS) {
-            ESP_LOGI(TAG, "HID Init sukses, regiistering app...");
-            esp_bt_hid_device_register_app(&s_local_param.app_param, &s_local_param.both_qos, &s_local_param.both_qos);
-        } else {
-            ESP_LOGE(TAG, "HID init Gagal kehed!");
-        }
-        break;
+// nimble gap + sm device peripheral only from esp-idf example esp_hid_gap.c 
+#define GATT_SVR_SVC_HID_UUID 0x1812
 
-    case ESP_HIDD_REGISTER_APP_EVT:
-        if (param->register_app.status == ESP_HIDD_SUCCESS) {
-            ESP_LOGI(TAG, "HIDD app registered, setting connectable/discoverable...");
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        } else {
-            ESP_LOGE(TAG, "HID app register gagal!");
-        }
-        break;
+static struct ble_hs_adv_fields s_adv_fields;
+static struct ble_hs_adv_fields s_rsp_fields;
 
-    case ESP_HIDD_OPEN_EVT:
-        if (param->open.status == ESP_HIDD_SUCCESS) {
-            ESP_LOGI(TAG, "Connected to: %02x:%02x:%02x:%02x:%02x:%02x", param->open.bd_addr[0], param->open.bd_addr[1], param->open.bd_addr[2], param->open.bd_addr[3], param->open.bd_addr[4], param->open.bd_addr[5]);
-            bt_connected = true;
-            esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-        } else {
-            ESP_LOGE(TAG, "Connection gagal, status : %d", param->open.status);
-        }
-        break;
+static esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name) {
+    static ble_uuid16_t uuid16;
+    
+    memset(&s_adv_fields, 0, sizeof(s_adv_fields));
+    s_adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    
+    uuid16 = (ble_uuid16_t)BLE_UUID16_INIT(GATT_SVR_SVC_HID_UUID);
+    s_adv_fields.uuids16 = &uuid16;
+    s_adv_fields.num_uuids16 = 1;
+    s_adv_fields.uuids16_is_complete = 1;
+    s_adv_fields.appearance = appearance;
+    s_adv_fields.appearance_is_present = 1;
+    ble_svc_gap_device_appearance_set(appearance);
 
-    case ESP_HIDD_CLOSE_EVT:
-        ESP_LOGI(TAG, "Disconected");
-        bt_connected = false;
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        break;
+    memset(&s_rsp_fields, 0, sizeof(s_rsp_fields));
+    s_rsp_fields.tx_pwr_lvl_is_present = 1;
+    s_rsp_fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    s_rsp_fields.name = (const uint8_t *)device_name;
+    s_rsp_fields.name_len = strlen(device_name);
+    s_rsp_fields.name_is_complete = 1;
 
-    case ESP_HIDD_SEND_REPORT_EVT:
-        //report berhasil
-        break;
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ID | BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist |= BLE_SM_PAIR_KEY_DIST_ID | BLE_SM_PAIR_KEY_DIST_ENC;
+    return ESP_OK;
+}
 
-    case ESP_HIDD_SET_PROTOCOL_EVT:
-        ESP_LOGI(TAG, "Protocol mode ganti ka: %s", param->set_protocol.protocol_mode == ESP_HIDD_BOOT_MODE ? "BOOT" : "REPORT");
-        xSemaphoreTake(bt_hid_mutex, portMAX_DELAY);
-        s_local_param.protocol_mode = param->set_protocol.protocol_mode;
-        xSemaphoreGive(bt_hid_mutex);
-        break;
+// gap event handler
+static int nimble_hid_gap_event(struct ble_gap_event *event, void *arg) {
+    struct ble_gap_conn_desc desc;
+    int rc;
 
-    default:
-        break;
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            s_conn_handle = event->connect.conn_handle;
+            ESP_LOGI(TAG, "connection %s, status = %d",event->connect.status == 0 ? "estabilished" : "failed", event->connect.status);
+            //request fast connection interval
+            if (event->connect.status == 0) {
+                struct ble_gap_upd_params params;
+                params.itvl_min = 6;
+                params.itvl_max = 12;
+                params.latency = 0;
+                params.supervision_timeout = 200;
+                params.min_ce_len = 0;
+                params.max_ce_len = 0;
+
+                int update_rc = ble_gap_update_params(event->connect.conn_handle, &params);
+                ESP_LOGI(TAG, "Request fast connection params... rc=%d", update_rc);
+            } else {
+                rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+                if (rc == 0) {
+                    ble_store_util_delete_peer(&desc.peer_id_addr);
+                }
+            }
+            return 0;
+
+        case BLE_GAP_EVENT_DISCONNECT:
+            s_conn_handle = 0;
+            ESP_LOGI(TAG, "disconnect reason=%d", event->disconnect.reason);
+            return 0;
+
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            ESP_LOGI(TAG, "encryption change event status = %d", event->enc_change.status); 
+            ble_hid_task_start_up();
+            return 0;
+
+        case BLE_GAP_EVENT_REPEAT_PAIRING:
+            rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+            if (rc == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
+
+        default:
+            return 0;
     }
 }
 
-static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
+static esp_err_t esp_hid_ble_gap_adv_start(void) {
+    int rc;
+    struct ble_gap_adv_params adv_params;
+    int32_t adv_duration_ms = 180000;
+
+    rc = ble_gap_adv_set_fields(&s_adv_fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "error setting advertisement data rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    rc = ble_gap_adv_rsp_set_fields(&s_rsp_fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "error setting scan response data rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    memset(&adv_params, 0, sizeof(adv_params));
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(30);
+    adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(60);
+
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, adv_duration_ms, &adv_params, nimble_hid_gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "error enabling advertisement rc=%d", rc);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t esp_hid_gap_init(void) {
+    esp_err_t ret;
+    esp_bt_controller_config_t ble_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    
+    ret = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    if (ret) {
+        ESP_LOGE(TAG, "esp_bt_controller_mem_release failed %d", ret);
+        return ret;
+    }
+    ret = esp_bt_controller_init(&ble_cfg);
+    if (ret) {
+        ESP_LOGE(TAG, "esp_bt_controller_init failed %d", ret);
+        return ret;
+    }
+    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    if (ret) {
+        ESP_LOGE(TAG, "esp_bt_controller_enable failed %d", ret);
+        return ret;
+    }
+    ret = esp_nimble_init();
+    if (ret) {
+        ESP_LOGE(TAG, "esp_nimble_init failed %d", ret);
+        return ret;
+    }
+    return ESP_OK;
+}
+
+static void ble_hidd_event_callback(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
+    esp_hidd_event_t event = (esp_hidd_event_t)id;
+    esp_hidd_event_data_t *param = (esp_hidd_event_data_t *)event_data;
+
     switch (event) {
-    case ESP_BT_GAP_AUTH_CMPL_EVT:
-        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "Auth berhasil: %s", param->auth_cmpl.device_name);
-        } else {
-            ESP_LOGE(TAG, "Auth gagal, status: %s", param->auth_cmpl.stat);
-        }
-        break;
+        case ESP_HIDD_START_EVENT:
+            ESP_LOGI(TAG, "HID START, mulai advertising");
+            esp_hid_ble_gap_adv_start();
+            break;
 
-    case ESP_BT_GAP_MODE_CHG_EVT:
-        ESP_LOGI(TAG, "ganti mode: %d", param->mode_chg.mode);
-        break;
+        case ESP_HIDD_CONNECT_EVENT:
+            ESP_LOGI(TAG, "BLE CONNECTED");
+            ble_connected = true;
+            break;
 
-    default:
-        break;
+        case ESP_HIDD_PROTOCOL_MODE_EVENT:
+            ESP_LOGI(TAG, "Protocol mode ganti ka: %s",param->protocol_mode.protocol_mode ? "REPORT" : "BOOT");
+            break;
+
+        case ESP_HIDD_DISCONNECT_EVENT:
+            ESP_LOGI(TAG, "BLE DISCONNECTED, advertising deui");
+            ble_connected = false;
+            esp_hid_ble_gap_adv_start();
+            break;
+
+        case ESP_HIDD_STOP_EVENT:
+            ESP_LOGI(TAG, "HID_STOP");
+            break;
+
+        default:
+            break;
     }
 }
+
+static void ble_hid_device_host_task(void *param) {
+    ESP_LOGI(TAG, "BLE Host Task Mulai");
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+void ble_store_config_init(void);//helper
 
 void mouse_polling_task(void *pvParameters) {
     uint8_t last_btn = 0;
@@ -657,7 +768,7 @@ void mouse_polling_task(void *pvParameters) {
 
         dpi_sm_update(btn);
 
-        if (report_needed && bt_connected) {
+        if (report_needed && ble_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
             ESP_LOGD(TAG, "REPORTED");
         }
@@ -701,7 +812,10 @@ void mouse_polling_task(void *pvParameters) {
 }
 
 void app_main(void){
-    ESP_LOGI(TAG, "MX8650 MOUSE TEST");
+    ESP_LOGI(TAG, "MX8650 MOUSE BLE HID");
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+    esp_log_level_set("ble_gap", ESP_LOG_WARN);
+    esp_log_level_set("NIMBLE_HIDD", ESP_LOG_NONE);
     //cpu freq scalling
     esp_pm_config_t pm_cfg = {
         .max_freq_mhz = 80,
@@ -710,6 +824,7 @@ void app_main(void){
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_cfg));
     ESP_LOGI(TAG, "CPU PM %d Mhz max / %d Mhz min", pm_cfg.max_freq_mhz, pm_cfg.min_freq_mhz);
+    
     btn_init();
     enc_init();
     mx8650_init();
@@ -717,7 +832,7 @@ void app_main(void){
     ESP_LOGI(TAG, "Tick rate: %d Hz, 1 tick = %d ms", configTICK_RATE_HZ, portTICK_PERIOD_MS);
     
     //bt init
-    bt_hid_mutex = xSemaphoreCreateMutex();
+    ble_hid_mutex = xSemaphoreCreateMutex();
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret ==ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -726,53 +841,18 @@ void app_main(void){
     }
     ESP_ERROR_CHECK(ret);
 
-    //bt init controller
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+    //init 
+    ESP_ERROR_CHECK(esp_hid_gap_init());
+    ESP_ERROR_CHECK(esp_hid_ble_gap_adv_init(ESP_HID_APPEARANCE_MOUSE, ble_hid_cfg.device_name));
+    ESP_LOGI(TAG, "Starting BLE HID Device...");
+    ESP_ERROR_CHECK(esp_hidd_dev_init(&ble_hid_cfg, ESP_HID_TRANSPORT_BLE, ble_hidd_event_callback, &s_ble_hid_param.hid_dev));
 
-    //init bluedroid
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
+    ble_svc_gap_device_name_set(ble_hid_cfg.device_name);
 
-    esp_bt_gap_set_device_name("ESP32 MX8650 Mouse");
+    ble_store_config_init();
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    //set class of device peripheral
-    esp_bt_cod_t cod;
-    cod.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL;
-    ESP_ERROR_CHECK(esp_bt_gap_set_cod(cod, ESP_BT_SET_COD_MAJOR_MINOR));
-
-    //init hid parameter
-    s_local_param.app_param.name = "Mouse";
-    s_local_param.app_param.description = "DIY ESP32 MX8650 Optical Mouse";
-    s_local_param.app_param.provider = "ESP32";
-    s_local_param.app_param.subclass = ESP_HID_CLASS_MIC; //mouse subclass
-    s_local_param.app_param.desc_list = (uint8_t *)hid_mouse_report_desc;
-    s_local_param.app_param.desc_list_len = HID_MOUSE_REPORT_DESC_LEN;
-    memset(&s_local_param.both_qos, 0, sizeof(esp_hidd_qos_param_t));
-    s_local_param.protocol_mode = ESP_HIDD_REPORT_MODE;
-
-    //reg callbacks
-    esp_bt_gap_register_callback(esp_bt_gap_cb);
-    esp_bt_hid_device_register_callback(esp_bt_hidd_cb);
-
-    //starting hid device
-    ESP_LOGI(TAG, "Starting BT HID Device..");
-    esp_bt_hid_device_init();
-
-    //security setting (pairing tanpa pin) 
-    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
-
-    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
-    esp_bt_pin_code_t pin_code;
-    esp_bt_gap_set_pin(pin_type, 0, pin_code);
-
-    //print bt address
-    const uint8_t *addr = esp_bt_dev_get_address();
-    ESP_LOGI(TAG, "BT Adress: %02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-    ESP_LOGI(TAG, "Device discoverable. sambungken entos aya di komputer maneh");
+    nimble_port_freertos_init(ble_hid_device_host_task);
 
     //polling task
     xTaskCreate(mouse_polling_task, "POLLING TASK", 4096, NULL, 5, NULL);
