@@ -16,6 +16,9 @@ DIY Bluetooth Mouse using ESP32 and MX8650 optical sensor and switches form salv
 - Salvaged mouse swithes
 - Logitech donor pcb (AC Pan support)
 
+## Schematic
+![Schematic](images/schematic.png)
+
 # Prototype
 
 ![Prototype](images/1.jpg)
