@@ -40,8 +40,7 @@ Implemented:
 - Adaptive polling
 
 In Progress:
-- BLE migration
+- Battery status
 
 ## Future Work
-- BLE migration
 - Battery status
