@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -7,6 +8,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 
 #define BAT_ADC_CH ADC_CHANNEL_6
+#define BATT_AVG_SAMPLE 8
 
 static char const *TAG = "Read Batt Level";
 
@@ -45,12 +47,16 @@ void adc_init(void) {
 }
 
 int16_t battery_voltage_mv(void) {
-    int raw, mv = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
+    int raw = 0, raw_sum = 0, mv = 0;
+    for (int i = 0; i < BATT_AVG_SAMPLE; i++) {
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
+        raw_sum += raw;
+    }
+    int raw_avg = raw_sum /  BATT_AVG_SAMPLE;
     if (adc_calibrated) {
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw, &mv));
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw_avg, &mv));
     } else {
-        mv = raw;
+        mv = raw_avg;
     }
     return mv * 2;
 }
