@@ -1,4 +1,3 @@
-#include <stdint.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -8,8 +7,10 @@
 #include "esp_adc/adc_cali_scheme.h"
 
 #define BAT_ADC_CH ADC_CHANNEL_6
-#define BATT_AVG_SAMPLE 8
+#define BATT_AVG_SAMPLE 16 
+#define BATT_HYSTERESIS_MV 20 
 
+static uint16_t last_mv = 0;
 static char const *TAG = "Read Batt Level";
 
 static adc_oneshot_unit_handle_t adc1_handle;
@@ -45,30 +46,45 @@ void adc_init(void) {
     }
 }
 
-int16_t battery_voltage_mv(void) {
+uint16_t battery_voltage_mv(void) {
     int raw = 0, raw_sum = 0, mv = 0;
     for (int i = 0; i < BATT_AVG_SAMPLE; i++) {
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
         raw_sum += raw;
     }
-    int raw_avg = raw_sum /  BATT_AVG_SAMPLE;
+    int raw_avg = raw_sum / BATT_AVG_SAMPLE;
     if (adc_calibrated) {
         ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw_avg, &mv));
     } else {
         mv = raw_avg;
     }
-    return (uint16_t)(mv * 2);
+    mv *= 2;
+
+    //hysteresis
+    if (last_mv != 0 && abs(mv - last_mv) < BATT_HYSTERESIS_MV) {
+        return last_mv;
+    }
+
+    last_mv = (uint16_t)mv;
+    return last_mv;
 }
 uint8_t battery_level_percent(int16_t mv) {
 
     if (mv >= 4200) return 100;
+    if (mv >= 4150) return 95;
     if (mv >= 4100) return 90;
-    if (mv >= 4000) return 80;
-    if (mv >= 3900) return 65;
-    if (mv >= 3800) return 45;
-    if (mv >= 3700) return 25; 
-    if (mv >= 3600) return 12;
+    if (mv >= 4050) return 85;
+    if (mv >= 4000) return 75;
+    if (mv >= 3950) return 65;
+    if (mv >= 3900) return 55;
+    if (mv >= 3850) return 45;
+    if (mv >= 3800) return 35;
+    if (mv >= 3750) return 25;
+    if (mv >= 3700) return 18;
+    if (mv >= 3650) return 12;
+    if (mv >= 3600) return 8;
     if (mv >= 3500) return 5;
+
     return 0;
 }
 
