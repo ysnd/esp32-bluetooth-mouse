@@ -12,7 +12,6 @@
 
 static char const *TAG = "Read Batt Level";
 
-
 static adc_oneshot_unit_handle_t adc1_handle;
 static adc_cali_handle_t adc1_cali;
 static bool adc_calibrated = false;
@@ -58,7 +57,7 @@ int16_t battery_voltage_mv(void) {
     } else {
         mv = raw_avg;
     }
-    return mv * 2;
+    return (uint16_t)(mv * 2);
 }
 uint8_t battery_level_percent(int16_t mv) {
 
@@ -81,6 +80,5 @@ void app_main(void)
         ESP_LOGI(TAG, "Battery = %.2f V", battery_mv / 1000.0f);
         ESP_LOGI(TAG, "Battery Level: %u%%", battery_level_percent(battery_mv));
         vTaskDelay(pdMS_TO_TICKS(200));
-    
     }
 }
