@@ -238,14 +238,31 @@ void read_battery_init(void) {
 }
 
 int16_t battery_voltage_mv(void) {
-    int raw = 0, mv = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
-    if (adc_calibrated) {
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw, &mv));
-    } else {
-        mv = raw;
+    int raw = 0, raw_sum = 0, mv = 0;
+    for (int i = 0; i < BATT_AVG_SAMPLE; i++) {
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
+        raw_sum += raw;
     }
-    return (int16_t)mv;
+    int raw_avg = raw_sum / BATT_AVG_SAMPLE;
+    if (adc_calibrated) {
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw_avg, &mv));
+    } else {
+        mv = raw_avg;
+    }
+    return (int16_t)(mv * 2);
+}
+
+uint8_t battery_level_percent(int16_t mv) {
+
+    if (mv >= 4200) return 100;
+    if (mv >= 4100) return 90;
+    if (mv >= 4000) return 80;
+    if (mv >= 3900) return 65;
+    if (mv >= 3800) return 45;
+    if (mv >= 3700) return 25; 
+    if (mv >= 3600) return 12;
+    if (mv >= 3500) return 5;
+    return 0;
 }
 
 //Button
