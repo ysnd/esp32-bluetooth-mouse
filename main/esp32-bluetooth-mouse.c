@@ -24,6 +24,7 @@
 #include "nimble/ble.h"
 #include "esp_nimble_hci.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/bas/ble_svc_bas.h"
 
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
@@ -113,6 +114,7 @@ static adc_oneshot_unit_handle_t adc1_handle;
 static adc_cali_handle_t adc1_cali;
 static bool adc_calibrated = false;
 static uint16_t last_mv = 0;
+static uint32_t batt_last_update = 0;
 
 static const char *TAG = "MX8650_BLE_Mouse";
 static encoder_t enc = {0};
@@ -210,7 +212,7 @@ static bool ble_connected = false;
 static uint16_t s_conn_handle = 0;
 
 //read BATT 
-void read_battery_init(void) {
+void battery_init(void) {
     adc_oneshot_unit_init_cfg_t init_cfg = {
         .unit_id = ADC_UNIT_1,
     };
@@ -849,6 +851,14 @@ void mouse_polling_task(void *pvParameters) {
         }
 
         dpi_sm_update(btn);
+        uint32_t now = esp_log_timestamp();
+        if ((now - batt_last_update) >= 30000) {
+            uint16_t batt_mv = battery_voltage_mv();
+            uint8_t batt_percent = battery_level_percent(batt_mv);
+            ESP_LOGD(TAG, "Battery %.3f V (%u%%)", batt_mv / 1000.0f, batt_percent);
+            ble_svc_bas_battery_level_set(batt_percent);
+            batt_last_update = now;
+        }
 
         if (report_needed && ble_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
@@ -909,6 +919,7 @@ void app_main(void){
     
     btn_init();
     enc_init();
+    battery_init();
     mx8650_init();
     mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
     ESP_LOGI(TAG, "Tick rate: %d Hz, 1 tick = %d ms", configTICK_RATE_HZ, portTICK_PERIOD_MS);
@@ -933,6 +944,8 @@ void app_main(void){
 
     ble_store_config_init();
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    ble_svc_bas_init();
 
     nimble_port_freertos_init(ble_hid_device_host_task);
 
