@@ -3,6 +3,8 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
@@ -34,6 +36,9 @@ const uint8_t BTN_TF = 5;
 const uint8_t BTN_TB = 19;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
+
+#define BAT_ADC_CH ADC_CHANNEL_6
+#define BATT_AVG_SAMPLE 8
 
 #define PRODUCT_ID_REG 0x00
 #define MOTION_STATUS_REG 0x02
@@ -103,7 +108,11 @@ static const int8_t enc_table[16] = {
     0, +1, -1, 0
 };
 
-static const char *TAG = "MX8650_Mouse_Test";
+static adc_oneshot_unit_handle_t adc1_handle;
+static adc_cali_handle_t adc1_cali;
+static bool adc_calibrated = false;
+
+static const char *TAG = "MX8650_BLE_Mouse";
 static encoder_t enc = {0};
 static cpi_t current_cpi = CPI_800;
 static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
@@ -197,6 +206,47 @@ static local_param_t s_ble_hid_param = {0};
 static SemaphoreHandle_t ble_hid_mutex = NULL;
 static bool ble_connected = false;
 static uint16_t s_conn_handle = 0;
+
+//read BATT 
+void read_battery_init(void) {
+    adc_oneshot_unit_init_cfg_t init_cfg = {
+        .unit_id = ADC_UNIT_1,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &adc1_handle));
+
+    adc_oneshot_chan_cfg_t config = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, BAT_ADC_CH, &config));
+
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+
+    esp_err_t ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &adc1_cali);
+    if (ret == ESP_OK) {
+        adc_calibrated = true;
+        ESP_LOGI(TAG, "ADC kalibrasi enable");
+    } else {
+        ESP_LOGW(TAG, "ADC kalibrasi unavailable (%s)", esp_err_to_name(ret));
+    }
+}
+
+int16_t battery_voltage_mv(void) {
+    int raw = 0, mv = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
+    if (adc_calibrated) {
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw, &mv));
+    } else {
+        mv = raw;
+    }
+    return (int16_t)mv;
+}
 
 //Button
 void btn_init(void) {
