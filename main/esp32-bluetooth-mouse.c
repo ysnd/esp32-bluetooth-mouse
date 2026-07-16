@@ -3,6 +3,8 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
@@ -22,6 +24,7 @@
 #include "nimble/ble.h"
 #include "esp_nimble_hci.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/bas/ble_svc_bas.h"
 
 const uint8_t SCLK = 18;
 const uint8_t SDIO = 23;
@@ -34,6 +37,10 @@ const uint8_t BTN_TF = 5;
 const uint8_t BTN_TB = 19;
 const uint8_t ENC_A = 25;
 const uint8_t ENC_B = 26;
+
+#define BAT_ADC_CH ADC_CHANNEL_6
+#define BATT_AVG_SAMPLE 16 
+#define BATT_HYSTERESIS_MV 20 
 
 #define PRODUCT_ID_REG 0x00
 #define MOTION_STATUS_REG 0x02
@@ -103,7 +110,13 @@ static const int8_t enc_table[16] = {
     0, +1, -1, 0
 };
 
-static const char *TAG = "MX8650_Mouse_Test";
+static adc_oneshot_unit_handle_t adc1_handle;
+static adc_cali_handle_t adc1_cali;
+static bool adc_calibrated = false;
+static uint16_t last_mv = 0;
+static uint32_t batt_last_update = 0;
+
+static const char *TAG = "MX8650_BLE_Mouse";
 static encoder_t enc = {0};
 static cpi_t current_cpi = CPI_800;
 static const uint16_t cpi_table[] = {800, 1000, 1200, 1600};
@@ -197,6 +210,77 @@ static local_param_t s_ble_hid_param = {0};
 static SemaphoreHandle_t ble_hid_mutex = NULL;
 static bool ble_connected = false;
 static uint16_t s_conn_handle = 0;
+
+//read BATT 
+void battery_init(void) {
+    adc_oneshot_unit_init_cfg_t init_cfg = {
+        .unit_id = ADC_UNIT_1,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &adc1_handle));
+
+    adc_oneshot_chan_cfg_t config = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, BAT_ADC_CH, &config));
+
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+
+    esp_err_t ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &adc1_cali);
+    if (ret == ESP_OK) {
+        adc_calibrated = true;
+        ESP_LOGI(TAG, "ADC kalibrasi enable");
+    } else {
+        ESP_LOGW(TAG, "ADC kalibrasi unavailable (%s)", esp_err_to_name(ret));
+    }
+}
+
+uint16_t battery_voltage_mv(void) {
+    int raw = 0, raw_sum = 0, mv = 0;
+    for (int i = 0; i < BATT_AVG_SAMPLE; i++) {
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
+        raw_sum += raw;
+    }
+    int raw_avg = raw_sum / BATT_AVG_SAMPLE;
+    if (adc_calibrated) {
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali, raw_avg, &mv));
+    } else {
+        mv = raw_avg;
+    }
+    mv *= 2;
+    //hysteresis 
+    if (last_mv != 0 && abs(mv - last_mv) < BATT_HYSTERESIS_MV) {
+        return last_mv;
+    }
+    last_mv = (uint16_t)mv;
+    return last_mv;
+}
+
+uint8_t battery_level_percent(uint16_t mv) {
+
+    if (mv >= 4200) return 100;
+    if (mv >= 4150) return 95;
+    if (mv >= 4100) return 90;
+    if (mv >= 4050) return 85;
+    if (mv >= 4000) return 75;
+    if (mv >= 3950) return 65;
+    if (mv >= 3900) return 55;
+    if (mv >= 3850) return 45;
+    if (mv >= 3800) return 35;
+    if (mv >= 3750) return 25;
+    if (mv >= 3700) return 18;
+    if (mv >= 3650) return 12;
+    if (mv >= 3600) return 8;
+    if (mv >= 3500) return 5;
+
+    return 0;
+}
 
 //Button
 void btn_init(void) {
@@ -767,6 +851,14 @@ void mouse_polling_task(void *pvParameters) {
         }
 
         dpi_sm_update(btn);
+        uint32_t now = esp_log_timestamp();
+        if ((now - batt_last_update) >= 30000) {
+            uint16_t batt_mv = battery_voltage_mv();
+            uint8_t batt_percent = battery_level_percent(batt_mv);
+            ESP_LOGD(TAG, "Battery %.3f V (%u%%)", batt_mv / 1000.0f, batt_percent);
+            ble_svc_bas_battery_level_set(batt_percent);
+            batt_last_update = now;
+        }
 
         if (report_needed && ble_connected) {
             send_mouse_report(btn, dx, dy, wheel, hwheel);
@@ -827,6 +919,7 @@ void app_main(void){
     
     btn_init();
     enc_init();
+    battery_init();
     mx8650_init();
     mx8650_set_sleep_mode(MX8650_SLEEP1_SLEEP2);
     ESP_LOGI(TAG, "Tick rate: %d Hz, 1 tick = %d ms", configTICK_RATE_HZ, portTICK_PERIOD_MS);
@@ -851,6 +944,8 @@ void app_main(void){
 
     ble_store_config_init();
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    ble_svc_bas_init();
 
     nimble_port_freertos_init(ble_hid_device_host_task);
 
