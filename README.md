@@ -8,7 +8,9 @@ DIY Bluetooth Mouse using ESP32 and MX8650 optical sensor and switches form salv
 - Thumb forward / back click
 - Scroll wheel
 - Horizontal scroll
-- Bluetooth HID
+- DPI Mode 800, 1000, 1200 , 1600
+- BLE HID
+- Battery service
 
 ## Hardware
 - ESP32 DevKit V1
@@ -30,17 +32,12 @@ Current prototype is built using salvaged components from multiple mice. front b
 Working prototype.
 
 Implemented: 
+- NimBLE HID
 - Cursor movement
 - Left / Right click
 - Middle click
 - Side buttons
 - Vertical scroll
 - Horizontal scroll
-- Adjustable DPI
+- Adjustable DPI with state machine
 - Adaptive polling
-
-In Progress:
-- Battery status
-
-## Future Work
-- Battery status
