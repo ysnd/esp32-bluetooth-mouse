@@ -6,7 +6,6 @@
 #include "esp_log.h"
 #include "esp_pm.h"
 #include "nvs_flash.h"
-#include "services/bas/ble_svc_bas.h"
 #include "drivers/config.h"
 #include "drivers/battery.h"
 #include "drivers/encoder.h"
@@ -70,10 +69,7 @@ void mouse_polling_task(void *pvParameters) {
         dpi_sm_update(btn);
         uint32_t now = esp_log_timestamp();
         if ((now - batt_last_update) >= 30000) {
-            uint16_t batt_mv = battery_voltage_mv();
-            uint8_t batt_percent = battery_level_percent(batt_mv);
-            ESP_LOGD(TAG, "Battery %.3f V (%u%%)", batt_mv / 1000.0f, batt_percent);
-            ble_svc_bas_battery_level_set(batt_percent);
+            ble_bas_update();
             batt_last_update = now;
         }
 
@@ -129,7 +125,7 @@ void app_main(void){
     esp_pm_config_t pm_cfg = {
         .max_freq_mhz = 80,
         .min_freq_mhz = 80,
-        .light_sleep_enable = false
+        .light_sleep_enable = true
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_cfg));
     ESP_LOGI(TAG, "CPU PM %d Mhz max / %d Mhz min", pm_cfg.max_freq_mhz, pm_cfg.min_freq_mhz);
@@ -149,7 +145,7 @@ void app_main(void){
     ESP_ERROR_CHECK(ret);
     
     ble_hid_init();
-    ble_svc_bas_init();
+    ble_bas_update();
  
     //polling task
     xTaskCreate(mouse_polling_task, "POLLING TASK", 4096, NULL, 5, NULL);

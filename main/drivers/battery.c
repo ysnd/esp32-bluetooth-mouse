@@ -40,10 +40,10 @@ void battery_init(void) {
         ESP_LOGI(TAG, "ADC kalibrasi enable");
     } else {
         ESP_LOGW(TAG, "ADC kalibrasi unavailable (%s)", esp_err_to_name(ret));
-    }
+    } 
 }
 
-uint16_t battery_voltage_mv(void) {
+static uint16_t battery_voltage_mv(void) {
     int raw = 0, raw_sum = 0, mv = 0;
     for (int i = 0; i < BATT_AVG_SAMPLE; i++) {
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, BAT_ADC_CH, &raw));
@@ -64,7 +64,7 @@ uint16_t battery_voltage_mv(void) {
     return last_mv;
 }
 
-uint8_t battery_level_percent(uint16_t mv) {
+static uint8_t battery_level_percent(uint16_t mv) {
 
     if (mv >= 4200) return 100;
     if (mv >= 4150) return 95;
@@ -84,3 +84,10 @@ uint8_t battery_level_percent(uint16_t mv) {
     return 0;
 }
 
+battery_info_t battery_get_info(void)
+{
+    battery_info_t batt;
+    batt.voltage_mv = battery_voltage_mv();
+    batt.percent = battery_level_percent(batt.voltage_mv);
+    return batt;
+}

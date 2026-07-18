@@ -1,4 +1,5 @@
 #include "drivers/config.h"
+#include "drivers/battery.h"
 #include "ble_hid.h"
 #include "esp_bt.h"
 #include "host/ble_hs.h"
@@ -12,6 +13,7 @@
 #include "nimble/ble.h"
 #include "esp_nimble_hci.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/bas/ble_svc_bas.h"
 
 //HID report descriptor
 static const uint8_t hid_mouse_report_desc[] = {
@@ -323,6 +325,8 @@ void ble_hid_init(void) {
 
     ble_store_config_init();
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    
+    ble_svc_bas_init();
 
     nimble_port_freertos_init(ble_hid_device_host_task);
 }
@@ -330,6 +334,14 @@ void ble_hid_init(void) {
 bool ble_is_connected(void) {
     return ble_connected;
 }
+
+void ble_bas_update(void) {
+    battery_info_t batt = battery_get_info();
+    
+    ESP_LOGD(TAG, "Battery %.3f V (%u%%)", batt.voltage_mv / 1000.0f, batt.percent);
+    ble_svc_bas_battery_level_set(batt.percent);
+}
+
 
 
 
